@@ -1,6 +1,3 @@
-# Trabalho-Pratico-Integracao-com-Supabase-e-Redis
-Trabalho Prático — Integração com Supabase e Redis, sendo implantado no aplicativo do trabalho anterior "LojaCore"
-
 ## TRABALHO PRÁTICO	PROJETO DE BANCO DE DADOS
 INTEGRAÇÃO COM SUPABASE E REDIS
 UNIFSA // ENGENHARIA DE SOFTWARE **28M4A**
