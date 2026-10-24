@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 #Por até alguns dias, este link não será mais válido...
-DATABASE_URL = "postgresql://postgres:22MeuBem4A7bV13@db.zjbnogzcelpzljvcvkkx.supabase.co:5432/postgres"
+DATABASE_URL = "(RESTRITO)"
 
 engine = create_engine(
     DATABASE_URL, echo=False, pool_pre_ping = True
