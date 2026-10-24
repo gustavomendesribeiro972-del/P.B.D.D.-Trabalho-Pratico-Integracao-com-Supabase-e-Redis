@@ -1,0 +1,1 @@
+Aqui só tem os codigos que eu fiz no supabase, não tem necessidade de executar-los no computador, ele está aqui apenas para demonstração.
