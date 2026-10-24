@@ -168,7 +168,8 @@ CREATE OR REPLACE PROCEDURE registrar_cliente(
 	p_empresa_id INTEGER,
 	p_nome VARCHAR,
 	p_cpf VARCHAR,
-	p_email VARCHAR
+	p_email VARCHAR,
+	p_data_nascimento DATE
 )
 LANGUAGE plpgsql
 AS $$
@@ -194,8 +195,9 @@ BEGIN
 	VALUES (
 		p_empresa_id,
 		TRIM(p_nome),
-		NULLIF(p_cpf, ''),
-		NULLIF(TRIM(p_email), '')
+		NULLIF(p_cpf, 'desconhecido'),
+		NULLIF(TRIM(p_email), 'desconhecido'),
+		NULLIF(p_data_nascimento, 'desconhecido')
 	);
 END;
 $$;
