@@ -45,7 +45,7 @@ BEGIN
 		END IF;
 	END IF;
 
-	IF p_subtotal < 0 OR p_desconto < 0 OR p_desconto > p_subtotal OR p_total <> p_subtotal - p_desconto THEN
+	IF p_subtotal < 0 OR p_desconto < 0 OR p_desconto > p_subtotal THEN
 			RAISE EXCEPTION 'Valores da venda inválidos.';
 	END IF;
 
@@ -214,13 +214,15 @@ CREATE OR REPLACE PROCEDURE registra_funcionarios(
 )
 LANGUAGE plpgsql
 AS $$
+DECLARE
+	v_cpf VARCHAR(11);
 BEGIN
 	IF NOT EXISTS (
 		SELECT 1
-		FROM perfil
-		WHERE id_perfil = p_perfil_id AND empresa_id = p_empresa_id
+		FROM empresa
+		WHERE empresa_id = p_empresa_id
 	) THEN
-		RAISE EXCEPTION 'Perfil não encontrado nesta empresa.';
+		RAISE EXCEPTION 'Empresa não encontrada.';
 	END IF;
 
 	IF NOT EXISTS (
@@ -241,6 +243,8 @@ BEGIN
 	IF LENGTH(p_senha) > 20 THEN
 		RAISE EXCEPTION 'A senha deve ter no máximo 20 caracteres.';
 	END IF;
+
+	v_cpf := REGEXP_REPLACE(COALESCE(p_cpf, ''), '[^0-9]', '', 'g');
 
 	IF LENGTH(v_cpf) <> 11 then
 		RAISE EXCEPTION 'O CPF deve conter 11 dígitos.';
