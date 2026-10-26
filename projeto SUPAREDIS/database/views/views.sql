@@ -85,6 +85,7 @@ SELECT
   c.id_cliente,
   c.nome_cliente,
   c.email,
+  c.cpf,
   c.telefone,
   c.data_nascimento,
   c.data_cadastro
@@ -110,10 +111,11 @@ FROM funcionario f
 INNER JOIN empresa e ON e.id_empresa = f.empresa_id
 INNER JOIN perfil p ON p.id_perfil = f.perfil_id AND p.empresa_id = f.empresa_id;
 
+
 --Testes:
 SELECT * FROM vw_vendas_recentes;
 SELECT * FROM vw_geral_estoque_produtos;
 SELECT * FROM vw_estoque_critico;
 SELECT * FROM vw_resumo_caixa_diario;
-SELECT * FROM vw_clientes_registrados;
-SELECT * FROM vw_funcionarios_registrados;
+SELECT * FROM vw_clientes_registrados WHERE id_empresa = 2;
+SELECT * FROM vw_funcionarios_registrados WHERE id_empresa = 3;
