@@ -61,6 +61,8 @@ CREATE OR REPLACE FUNCTION fn_calcular_pontos_compra(
 )
 RETURNS INTEGER
 AS $$
+DECLARE
+	v_fator_conversao NUMERIC := 10;
 BEGIN
 	IF p_valor_compra IS NULL OR p_valor_compra <= 0 THEN
 		RETURN 0;
