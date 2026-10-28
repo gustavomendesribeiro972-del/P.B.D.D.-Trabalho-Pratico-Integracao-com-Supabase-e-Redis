@@ -1,7 +1,7 @@
 import sys, re
 from decimal import Decimal, InvalidOperation
 from PyQt6.QtCore import Qt, QDate
-from PyQt6.QtGui import QFont, QIcon, QPixmap
+from PyQt6.QtGui import QFont, QIcon, QPixmap, QColor
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -19,7 +19,8 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QVBoxLayout,
     QWidget,
-    QDateEdit
+    QDateEdit,
+    QGraphicsDropShadowEffect
 )
 from pathlib import Path
 
@@ -53,6 +54,13 @@ from conexao import (
     app_empresa_tem_funcionarios,        #novo
     app_buscar_perfil_administrador        #novo
 )
+
+def aplicar_efeito_vidro(widget):
+    sombra = QGraphicsDropShadowEffect()
+    sombra.setBlurRadius(25)
+    sombra.setColor(QColor(0, 0, 0, 160)) # Sombra negra profunda
+    sombra.setOffset(0, 8)
+    widget.setGraphicsEffect(sombra)
 
 #Restrições ao cadastrar:
 def validar_nome_usuario(nome):
@@ -470,12 +478,14 @@ class TelaEmpresa(QWidget):
                     "Cadastre o administrador inicial para continuar."
                 )
 
-                tela_principal = self.stack.widget(2)
-                self.stack.setCurrentIndex(tela_principal)
-                tela_principal.abrir_pagina("cadastrar_funcionario")
+                self.stack.setCurrentIndex(2)
+
+                pagina_principal = self.stack.widget(2)
+                if pagina_principal:
+                    pagina_principal.abrir_pagina("cadastrar_funcionario")
 
             else:
-                self.stack.setCurrentWidget(self.stack.widget(1))
+                self.stack.setCurrentIndex(1)
 
         except Exception as e:
             QMessageBox.critical(
@@ -494,7 +504,7 @@ class TelaEmpresa(QWidget):
             QMessageBox.warning(
                 self,
                 "Atenção",
-                "Preencha o nome, CNPJ e senha da empresa."
+                "Preencha o nome, CNPJ, descrição e senha da empresa."
             )
             return
 
@@ -544,14 +554,12 @@ class TelaEmpresa(QWidget):
             )
 
 
-
 class TelaCadastroFun(QWidget):
     def __init__(self, sub_stack, app_stack=None):
         super().__init__()
         self.sub_stack = sub_stack
         self.app_stack = app_stack
 
-        # Layout da janela:
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -568,32 +576,34 @@ class TelaCadastroFun(QWidget):
         frame_layout.setContentsMargins(12, 18, 25, 20)
         frame_layout.setSpacing(15)
 
-        # Os widgets:
-        titulo = QLabel("Cadastro de Funcionaáio")
+        titulo = QLabel("Cadastro de Funcionário")
         titulo.setFont(QFont("Arial", 22, QFont.Weight.Bold))
 
         self.usuario = QLineEdit()
-        self.usuario.setPlaceholderText("Usuário")
+        self.usuario.setPlaceholderText("Usuário (ex: joao.silva)")
         self.usuario.setMinimumHeight(45)
 
         self.cpf = QLineEdit()
         self.cpf.setPlaceholderText("CPF")
+        self.cpf.setMinimumHeight(45)
 
         self.telefone = QLineEdit()
         self.telefone.setPlaceholderText("Telefone")
+        self.telefone.setMinimumHeight(45)
 
         self.email = QLineEdit()
         self.email.setPlaceholderText("E-mail")
+        self.email.setMinimumHeight(45)
 
         self.senha = QLineEdit()
         self.senha.setPlaceholderText("Senha")
         self.senha.setEchoMode(QLineEdit.EchoMode.Password)
+        self.senha.setMinimumHeight(45)
 
-        botao_cadastrar = QPushButton("Cadastrar Funcionario")
+        botao_cadastrar = QPushButton("Cadastrar Funcionário")
         botao_cadastrar.setMinimumHeight(45)
         botao_cadastrar.clicked.connect(self.realizar_cadastro)
 
-        # Adiciona cada widget ao frame_layout e, ao final, adiciona o frame ao layout.
         for widget in (
             titulo,
             self.usuario,
@@ -607,30 +617,23 @@ class TelaCadastroFun(QWidget):
 
         layout.addWidget(frame)
 
-    # Ações:
     def voltar_acao(self):
-            """Se for cadastro inicial, vai para o login; senão, volta para o menu principal interno."""
-            if self.eh_cadastro_admin_inicial():
-                if self.app_stack:
-                    self.app_stack.setCurrentIndex(1) # Vai para tela de login de funcionário
-            else:
-                self.sub_stack.setCurrentIndex(0) # Volta para o dashboard principal
+        if self.eh_cadastro_admin_inicial():
+            if self.app_stack:
+                self.app_stack.setCurrentIndex(1)  # Vai para o login de funcionário
+        else:
+            self.sub_stack.setCurrentIndex(0)  # Volta para o menu principal interno
 
     def eh_cadastro_admin_inicial(self):
+        """Retorna True se a empresa ainda não possui nenhum funcionário cadastrado."""
         empresa = SessaoEmpresa.obter_empresa()
         if not empresa or empresa.get("empresa_id") is None:
             return False
         
-        # Consulta rápida no banco para ter certeza absoluta do estado da empresa
         try:
-            from conexao import app_empresa_tem_funcionarios
             empresa_id = int(empresa["empresa_id"])
             return not app_empresa_tem_funcionarios(empresa_id)
         except Exception:
-            # Fallback caso ocorra algum erro na consulta
-            if self.app_stack:
-                tela_empresa = self.app_stack.widget(0)
-                return getattr(tela_empresa, "cadastro_admin_obrigatorio", False)
             return False
 
     def realizar_cadastro(self):
@@ -638,97 +641,58 @@ class TelaCadastroFun(QWidget):
         cpf = self.cpf.text().strip()
         telefone = self.telefone.text().strip()
         email = self.email.text().strip()
-        senha = self.senha.text().strip()
+        senha = self.senha.text()
 
         if not nome or not cpf or not email or not senha:
-            QMessageBox.warning(
-                self,
-                "Cadastro",
-                "Preencha Nome, CPF, Email e Senha."
-            )
+            QMessageBox.warning(self, "Cadastro", "Preencha Nome, CPF, Email e Senha.")
             return
 
         if not validar_nome_usuario(nome):
             QMessageBox.warning(
-                self,
-                "Nome inválido",
-                "O nome não pode conter espaços.\n"
-                "Use pontos para separar as partes, "
-                "por exemplo: joao.silva"
+                self, "Nome inválido",
+                "O nome não pode conter espaços.\nUse pontos para separar, ex: joao.silva"
             )
             self.usuario.setFocus()
             return
 
         if not validar_email(email):
             QMessageBox.warning(
-                self,
-                "E-mail inválido",
-                "Informe um e-mail válido terminado em "
-                "@hotmail.com, @gmail.com ou @email.com."
+                self, "E-mail inválido",
+                "Informe um e-mail válido terminado em @hotmail.com, @gmail.com ou @email.com."
             )
             self.email.setFocus()
             return
 
         empresa = SessaoEmpresa.obter_empresa()
-
-        if not empresa:
-            QMessageBox.warning(
-                self,
-                "Sessão da empresa",
-                "Faça login na empresa antes de cadastrar o funcionário."
-            )
+        if not empresa or empresa.get("empresa_id") is None:
+            QMessageBox.warning(self, "Sessão da empresa", "Faça login na empresa antes de cadastrar o funcionário.")
             return
 
-        empresa_id = empresa.get("empresa_id")
+        empresa_id = int(empresa["empresa_id"])
+        eh_admin_inicial = self.eh_cadastro_admin_inicial()
 
-        if empresa_id is None:
-            QMessageBox.critical(
-                self,
-                "Erro",
-                "Não foi possível identificar a empresa."
-            )
-            return
-
-        if not self.eh_cadastro_admin_inicial():
-            QMessageBox.warning(
-                self,
-                "Cadastro indisponível",
-                "Os funcionários devem ser cadastrados "
-                "pelo submenu Funcionários."
-            )
-            return
-        
-        eh_inicial = self.eh_cadastro_admin_inicial()
-        tem_permissao_gerenciar = SessaoUsuario.tem_permissao("GERENCIAR_FUNCIONARIOS")
-
-        if not eh_inicial and not tem_permissao_gerenciar:
-            QMessageBox.warning(
-                self,
-                "Acesso negado",
-                "Você não possui permissão para cadastrar novos funcionários."
-            )
-            return
-
-        try:
-            # Se for o primeiro acesso, busca o perfil de administrador. 
-            # Caso contrário, você pode ajustar para pegar o perfil selecionado ou o padrão.
-            if eh_inicial:
-                perfil_id = app_buscar_perfil_administrador(empresa_id)
-            else:
-                # Exemplo: Se já houver um perfil padrão ou se você tiver um campo de seleção de perfil na tela.
-                # Caso queira buscar o perfil de admin por padrão para novos cadastros via submenu também:
-                perfil_id = app_buscar_perfil_administrador(empresa_id)
-
-            if perfil_id is None:
+        # =========================================================================
+        # REGRA DE ACESSO:
+        # Se NÃO for o primeiro acesso da empresa, exige que o usuário logado 
+        # possua a permissão "GERENCIAR_FUNCIONARIOS".
+        # =========================================================================
+        if not eh_admin_inicial:
+            if not SessaoUsuario.tem_permissao("GERENCIAR_FUNCIONARIOS"):
                 QMessageBox.warning(
-                    self,
-                    "Perfil não definido",
-                    "Não foi possível identificar o perfil de acesso."
+                    self, 
+                    "Acesso negado", 
+                    "Você não possui permissão para cadastrar novos funcionários."
                 )
                 return
 
+        try:
+            perfil_id = app_buscar_perfil_administrador(empresa_id)
+            if perfil_id is None:
+                QMessageBox.warning(self, "Perfil não definido", "Não foi possível identificar o perfil de acesso.")
+                return
+
             sucesso, mensagem = registrar_funcionarios(
-                empresa_id=int(empresa_id),
+                empresa_id=empresa_id,
                 perfil_id=int(perfil_id),
                 nome_usuario=nome,
                 nome_apelido=nome,
@@ -739,20 +703,12 @@ class TelaCadastroFun(QWidget):
             )
 
             if not sucesso:
-                QMessageBox.critical(
-                    self,
-                    "Erro ao cadastrar funcionário",
-                    mensagem
-                )
+                QMessageBox.critical(self, "Erro ao cadastrar funcionário", mensagem)
                 return
 
-            QMessageBox.information(
-                self,
-                "Sucesso",
-                "Funcionário cadastrado com sucesso!"
-            )
+            QMessageBox.information(self, "Sucesso", "Funcionário cadastrado com sucesso!")
 
-            # Limpar os campos
+            # Limpar campos
             self.usuario.clear()
             self.cpf.clear()
             self.telefone.clear()
@@ -760,22 +716,14 @@ class TelaCadastroFun(QWidget):
             self.senha.clear()
 
             # Redirecionamento correto
-            if eh_inicial:
+            if eh_admin_inicial:
                 if self.app_stack:
-                    self.app_stack.setCurrentIndex(1) # Vai para o login
+                    self.app_stack.setCurrentIndex(1)  # Vai para a tela de login da empresa
             else:
-                self.sub_stack.setCurrentIndex(0) # Retorna ao menu interno
+                self.sub_stack.setCurrentIndex(0)  # Retorna ao menu interno principal
 
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Erro ao cadastrar funcionário",
-                f"Não foi possível cadastrar:\n{e}"
-            )
-
-
-    def ir_para_login(self):
-        self.stack.setCurrentIndex(1)
+            QMessageBox.critical(self, "Erro ao cadastrar funcionário", f"Não foi possível cadastrar:\n{e}")
 
 
 class TelaLoginFun(QWidget):
@@ -841,7 +789,7 @@ class TelaLoginFun(QWidget):
 
     def realizar_login(self):
         cpf = self.cpf.text().strip()
-        senha = self.senha.text().strip()
+        senha = self.senha.text()
 
         if not cpf or not senha:
             QMessageBox.warning(
@@ -1503,8 +1451,6 @@ class TelaCadastrosPontos(QWidget):
         btn_atualizar_clientes.clicked.connect(self.carregar_clientes)
         layout_principal.addWidget(btn_atualizar_clientes)
 
-        self.carregar_clientes()
-
         # Botão abaixo do contêiner
         layout_botoes = QHBoxLayout()
         layout_botoes.addStretch()
@@ -1533,24 +1479,36 @@ class TelaCadastrosPontos(QWidget):
         cpf = self.input_cpf_cliente.text().strip()
         email = self.input_email_cliente.text().strip()
 
-        # Se estiver marcado para não informar, envia None
+        # Permite cadastrar sem informar a data de nascimento.
         if self.check_sem_data.isChecked():
             data_nascimento = None
         else:
-            data_nascimento = self.input_data_nascimento.date().toString("yyyy-MM-dd")
+            data_nascimento = (
+                self.input_data_nascimento.date()
+                .toString("yyyy-MM-dd")
+            )
 
         if not nome or not cpf:
-            QMessageBox.warning(self, "Atenção", "Preencha o nome e o CPF do cliente.")
-            return
-           
-        empresa = SessaoEmpresa.obter_empresa()
-        if not empresa or empresa.get("empresa_id") is None:
-            QMessageBox.warning(self, "Sessão da empresa", "Faça login na empresa antes de cadastrar clientes.")
+            QMessageBox.warning(
+                self,
+                "Atenção",
+                "Preencha o nome e o CPF do cliente."
+            )
             return
 
-        empresa_id = int(empresa["empresa_id"])
+        empresa = SessaoEmpresa.obter_empresa()
+
+        if not empresa or empresa.get("empresa_id") is None:
+            QMessageBox.warning(
+                self,
+                "Sessão da empresa",
+                "Faça login na empresa antes de cadastrar clientes."
+            )
+            return
 
         try:
+            empresa_id = int(empresa["empresa_id"])
+
             sucesso, mensagem = cadastrar_cliente(
                 empresa_id=empresa_id,
                 nome=nome,
@@ -1560,74 +1518,43 @@ class TelaCadastrosPontos(QWidget):
             )
 
             if not sucesso:
-                QMessageBox.critical(self, "Erro", mensagem)
+                QMessageBox.warning(self, "Erro", str(mensagem))
                 return
 
-            QMessageBox.information(self, "Sucesso", mensagem)
+            QMessageBox.information(
+                self, "Sucesso", str(mensagem)
+            )
 
             self.input_nome_cliente.clear()
             self.input_cpf_cliente.clear()
             self.input_email_cliente.clear()
+
             self.check_sem_data.setChecked(False)
             self.alternar_data_nascimento()
-            self.input_data_nascimento.setDate(QDate.currentDate().addYears(-18))
+
+            self.input_data_nascimento.setDate(
+                QDate.currentDate().addYears(-18)
+            )
 
             self.carregar_clientes()
 
         except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Erro ao cadastrar cliente:\n{e}")
+            QMessageBox.critical(
+                self,
+                "Erro ao cadastrar cliente",
+                f"Não foi possível cadastrar o cliente:\n{e}"
+            )
 
     def carregar_clientes(self):
         empresa = SessaoEmpresa.obter_empresa()
+
         if not empresa or empresa.get("empresa_id") is None:
             return
 
-        empresa_id = int(empresa["empresa_id"])
-
         try:
+            empresa_id = int(empresa["empresa_id"])
             dados = vw_clientes_registrados(empresa_id) or []
-            registros = []
 
-            for registro in dados:
-                if hasattr(registro, "_mapping"):
-                    registro = dict(registro._mapping)
-                elif isinstance(registro, dict):
-                    registro = dict(registro)
-                elif isinstance(registro, (tuple, list)):
-                    registro = {f"Campo {i + 1}": valor for i, valor in enumerate(registro)}
-                else:
-                    registro = {"Registro": str(registro)}
-                registros.append(registro)
-
-            if not registros:
-                self.tabela_clientes.clear()
-                self.tabela_clientes.setRowCount(0)
-                self.tabela_clientes.setColumnCount(0)
-                return
-
-            colunas = list(registros[0].keys())
-            self.tabela_clientes.clear()
-            self.tabela_clientes.setColumnCount(len(colunas))
-            self.tabela_clientes.setHorizontalHeaderLabels(colunas)
-            self.tabela_clientes.setRowCount(len(registros))
-
-            for linha, registro in enumerate(registros):
-                for coluna, nome in enumerate(colunas):
-                    valor = registro.get(nome)
-                    texto = "—" if valor is None else str(valor)
-                    self.tabela_clientes.setItem(linha, coluna, QTableWidgetItem(texto))
-
-        except Exception as e:
-            QMessageBox.critical(self, "Erro ao carregar clientes", f"Não foi possível consultar os clientes:\n{e}")
-
-    def carregar_clientes(self):
-        empresa = SessaoEmpresa.obter_empresa()
-        if not empresa or empresa.get("empresa_id") is None:
-            return
-        empresa_id = int(empresa["empresa_id"])
-
-        try:
-            dados = vw_clientes_registrados(empresa_id) or []
             registros = []
 
             for registro in dados:
@@ -1645,22 +1572,22 @@ class TelaCadastrosPontos(QWidget):
 
                 registros.append(registro)
 
+            self.tabela_clientes.clear()
+
             if not registros:
-                self.tabela_clientes.clear()
                 self.tabela_clientes.setRowCount(0)
                 self.tabela_clientes.setColumnCount(0)
                 return
 
             colunas = list(registros[0].keys())
 
-            self.tabela_clientes.clear()
             self.tabela_clientes.setColumnCount(len(colunas))
             self.tabela_clientes.setHorizontalHeaderLabels(colunas)
             self.tabela_clientes.setRowCount(len(registros))
 
             for linha, registro in enumerate(registros):
-                for coluna, nome in enumerate(colunas):
-                    valor = registro.get(nome)
+                for coluna, nome_coluna in enumerate(colunas):
+                    valor = registro.get(nome_coluna)
                     texto = "—" if valor is None else str(valor)
 
                     self.tabela_clientes.setItem(
@@ -1674,67 +1601,6 @@ class TelaCadastrosPontos(QWidget):
                 self,
                 "Erro ao carregar clientes",
                 f"Não foi possível consultar os clientes:\n{e}"
-            )
-
-    def executar_cadastro_cliente(self):
-        nome = self.input_nome_cliente.text().strip()
-        cpf = self.input_cpf_cliente.text().strip()
-        email = self.input_email_cliente.text().strip()
-
-        data_nascimento = self.input_data_nascimento.date().toString(
-            "yyyy-MM-dd"
-        )
-
-        if not nome or not cpf:
-            QMessageBox.warning(
-                self,
-                "Atenção",
-                "Preencha o nome e o CPF do cliente."
-            )
-            return
-           
-        empresa = SessaoEmpresa.obter_empresa()
-
-        if not empresa or empresa.get("empresa_id") is None:
-            QMessageBox.warning(
-                self,
-                "Sessão da empresa",
-                "Faça login na empresa antes de cadastrar clientes."
-            )
-            return
-
-        empresa_id = int(empresa["empresa_id"])
-
-        try:
-            sucesso, mensagem = cadastrar_cliente(
-                empresa_id=empresa_id,
-                nome=nome,
-                cpf=cpf,
-                email=email,
-                data_nascimento=data_nascimento
-            )
-
-            if not sucesso:
-                QMessageBox.critical(self, "Erro", mensagem)
-                return
-
-            QMessageBox.information(self, "Sucesso", mensagem)
-
-            self.input_nome_cliente.clear()
-            self.input_cpf_cliente.clear()
-            self.input_email_cliente.clear()
-
-            self.input_data_nascimento.setDate(
-                QDate.currentDate().addYears(-18)
-            )
-
-            self.carregar_clientes()
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Erro",
-                f"Erro ao cadastrar cliente:\n{e}"
             )
 
 
@@ -2153,11 +2019,11 @@ class TelaPrincipalSistema(QWidget):
         
         permissoes_por_pagina = {
                 "funcionarios": "GERENCIAR_FUNCIONARIOS",
+                "cadastrar_funcionario": "GERENCIAR_FUNCIONARIOS",
                 "cadastros": "GERENCIAR_CLIENTES",
                 "registrar_venda": "REALIZAR_VENDAS",
                 "status_produto": "GERENCIAR_PRODUTOS",
-                "estoque": "GERENCIAR_PRODUTOS",
-                "cadastrar_funcionario": "GERENCIAR_FUNCIONARIOS"
+                "estoque": "GERENCIAR_PRODUTOS"
             }
 
         permissao = permissoes_por_pagina.get(chave)
@@ -2185,6 +2051,8 @@ class TelaPrincipalSistema(QWidget):
                 pagina.carregar_vendas()
             elif chave == "caixa":
                 pagina.carregar_caixa()
+            elif chave == "estatisticas":
+                pagina.carregar_dados_estatisticas()
 
 
     def atualizar_dados_perfil(self):
@@ -2314,17 +2182,17 @@ class TelaRegistrarVenda(QWidget):
         if not texto:
             raise ValueError("Preencha os valores obrigatórios.")
 
-        if "," in texto and "." in texto:
-            # Exemplo: 1.500,50
+        if "," in texto:
+            # Formato brasileiro: 1.500,50 ou 150,50
             texto = texto.replace(".", "").replace(",", ".")
-        else:
-            # Aceita 150,50 ou 150.50
-            texto = texto.replace(",", ".")
 
         try:
             valor = Decimal(texto)
         except InvalidOperation:
-            raise ValueError("Informe um valor numérico válido.")
+            raise ValueError(
+                "Informe um valor numérico válido, "
+                "como 150,50 ou 1.500,50."
+            )
 
         if not valor.is_finite():
             raise ValueError("Informe um valor finito.")
@@ -2400,30 +2268,46 @@ class TelaRegistrarVenda(QWidget):
             funcionario_id = None
 
             if isinstance(usuario, dict):
-                for chave in (
+                chaves_id = (
                     "funcionario_id",
                     "id_funcionario",
                     "idFuncionario",
                     "id"
-                ):
-                    if usuario.get(chave) is not None:
-                        funcionario_id = usuario[chave]
+                )
+
+                for chave in chaves_id:
+                    valor = usuario.get(chave)
+
+                    if valor is None:
+                        funcionario_id = valor
                         break
 
             if funcionario_id is None:
                 QMessageBox.critical(
                     self, "Erro de sessão",
-                    "Não foi possível identificar o ID do funcionário "
-                    "logado. Verifique os dados retornados pelo banco."
+                    "Não foi possível identificar o ID do funcionário. "
+                    "Confira os campos retornados por "
+                    "app_buscar_funcionario_por_cpf() em conexao.py."
                 )
                 return
 
-            funcionario_id = int(funcionario_id)
+            try:
+                funcionario_id = int(funcionario_id)
+            except (ValueError, TypeError):
+                QMessageBox.critical(
+                    self,
+                    "Erro de sessão",
+                    "O ID do funcionário não é um número válido."
+                )
+                return
 
             if funcionario_id <= 0:
-                raise ValueError(
+                QMessageBox.critical(
+                    self,
+                    "Erro de sessão",
                     "O ID do funcionário deve ser positivo."
                 )
+                return
 
             if not SessaoUsuario.tem_permissao("REALIZAR_VENDAS"):
                 QMessageBox.warning(
@@ -2623,20 +2507,13 @@ class TelaCalcularPontos(QWidget):
             return
 
         try:
-            # Aceita 150,00; 150.00 e 1.500,00.
-            if "," in texto and "." in texto:
-                texto = texto.replace(".", "").replace(",", ".")
-            else:
-                texto = texto.replace(",", ".")
+            valor = TelaRegistrarVenda.converter_decimal(texto)
 
-            valor = Decimal(texto)
-
-            if not valor.is_finite() or valor <= 0:
+            if valor <= 0:
                 raise ValueError(
                     "O valor deve ser maior que zero."
                 )
 
-            # Chama a função importada de conexao.py.
             pontos = fn_calcular_pontos_compra(float(valor))
 
             if pontos is None:
@@ -2652,11 +2529,7 @@ class TelaCalcularPontos(QWidget):
             )
 
         except (ValueError, ArithmeticError) as e:
-            QMessageBox.warning(
-                self,
-                "Valor inválido",
-                str(e)
-            )
+            QMessageBox.warning(self, "Valor inválido", str(e))
 
         except Exception as e:
             QMessageBox.critical(
@@ -2691,270 +2564,189 @@ class LojaCoreApp(QMainWindow):
         self.stack.setCurrentIndex(0)
 
     def aplicar_estilo(self):
-        self.setStyleSheet("""
-            /* ===== ESTILO GLOBAL ===== */
-            QWidget {
-                background-color: #F1F5F9;
-                color: #243447;
-                font-family: Arial;
-                font-size: 13px;
-            }
+        QSS_AZUL_MONOCROMATICO_GLASS = """
+        QMainWindow, QWidget {
+            background: qlineargradient(
+                x1: 0, y1: 0, x2: 1, y2: 1,
+                stop: 0 #121212,
+                stop: 0.5 #1A1A1A,
+                stop: 1 #121212
+            );
+            color: #CCCCCC;
+            font-family: "Segoe UI", Arial, sans-serif;
+            font-size: 13px;
+        }
 
-            /* ===== PAINEL LATERAL ===== */
-            #painelLateral {
-                background-color: #142D4E;
-                border: 1px solid #203F63;
-                border-radius: 12px;
-            }
+        /* Cartões de Vidro com Fundo Grafite Translúcido e Sem Saturação */
+        QFrame#cadastro, QFrame#cadastroCliente, QFrame#loginFrame, 
+        QFrame#cardModulo, QFrame#frameSessao, QFrame#cardResumo {
+            background-color: rgba(35, 35, 35, 0.65);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+        }
 
-            #painelLateral QLabel {
-                background-color: transparent;
-                color: #FFFFFF;
-            }
+        QFrame#cardModulo:hover {
+            background-color: rgba(45, 45, 45, 0.80);
+            border: 1px solid rgba(255, 255, 255, 0.20);
+        }
 
-            #nomeLoja {
-                font-size: 21px;
-                font-weight: bold;
-                color: #FFFFFF;
-            }
+        /* Labels e Títulos Neutros */
+        QLabel {
+            background: transparent;
+            color: #D4D4D4;
+        }
 
-            #iconeLoja {
-                background-color: #203F63;
-                border: 1px solid #41658A;
-                border-radius: 12px;
-            }
+        QLabel[objectName^="titulo"] {
+            color: #FFFFFF;
+            font-weight: bold;
+        }
 
-            #painelLateral QPushButton {
-                background-color: #203F63;
-                color: #FFFFFF;
-                border: 1px solid transparent;
-                border-radius: 7px;
-                padding: 10px;
-                text-align: left;
-            }
+        /* Campos de Entrada (QLineEdit, QComboBox, QDateEdit, etc.) */
+        QLineEdit, QSpinBox, QDoubleSpinBox, QDateEdit, QComboBox, QTextEdit {
+            background-color: rgba(20, 20, 20, 0.75);
+            color: #E0E0E0;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 6px;
+            padding: 8px 12px;
+            selection-background-color: #555555;
+            selection-color: #FFFFFF;
+        }
 
-            #painelLateral QPushButton:hover {
-                background-color: #2D5680;
-                border: 1px solid #5B85B0;
-            }
+        QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QDateEdit:focus, QComboBox:focus, QTextEdit:focus {
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            background-color: rgba(20, 20, 20, 0.95);
+        }
 
-            #painelLateral QPushButton:pressed {
-                background-color: #10243D;
-            }
+        QLineEdit::placeholder {
+            color: #777777;
+        }
 
-            /* ===== TÍTULOS ===== */
-            #tituloPagina {
-                font-size: 23px;
-                font-weight: bold;
-                color: #142D4E;
-                padding: 5px;
-            }
+        /* Botões em Tons Neutros Grafite / Chumbo */
+        QPushButton {
+            background: qlineargradient(
+                x1: 0, y1: 0, x2: 0, y2: 1,
+                stop: 0 rgba(50, 50, 50, 0.9),
+                stop: 1 rgba(35, 35, 35, 0.9)
+            );
+            color: #E0E0E0;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-weight: 600;
+        }
 
-            #subtitulo {
-                color: #64748B;
-                font-size: 14px;
-            }
+        QPushButton:hover {
+            background: qlineargradient(
+                x1: 0, y1: 0, x2: 0, y2: 1,
+                stop: 0 rgba(70, 70, 70, 0.9),
+                stop: 1 rgba(50, 50, 50, 0.9)
+            );
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: #FFFFFF;
+        }
 
-            /* ===== CARDS DO MENU ===== */
-            #cardMenu {
-                background-color: #FFFFFF;
-                border: 1px solid #D8E2EE;
-                border-radius: 12px;
-            }
+        QPushButton:pressed {
+            background-color: rgba(25, 25, 25, 0.95);
+        }
 
-            #tituloCard {
-                background-color: transparent;
-                color: #142D4E;
-                font-size: 15px;
-                font-weight: bold;
-            }
+        QPushButton:disabled {
+            background-color: rgba(30, 30, 30, 0.4);
+            color: #666666;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+        }
 
-            #descricaoCard {
-                background-color: transparent;
-                color: #64748B;
-            }
+        /* Botões Secundários e Voltar */
+        QPushButton[objectName^="btn_voltar"], QPushButton#btnSecundario {
+            background-color: rgba(30, 30, 30, 0.5);
+            color: #AAAAAA;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
 
-            /* ===== CAMPOS DE TEXTO ===== */
-            QLineEdit {
-                background-color: #FFFFFF;
-                color: #243447;
-                border: 1px solid #CBD5E1;
-                border-radius: 7px;
-                padding: 10px;
-                min-height: 20px;
-                selection-background-color: #2563A6;
-                selection-color: #FFFFFF;
-            }
+        QPushButton[objectName^="btn_voltar"]:hover, QPushButton#btnSecundario:hover {
+            background-color: rgba(50, 50, 50, 0.7);
+            color: #FFFFFF;
+        }
 
-            QLineEdit:focus {
-                border: 1px solid #2563A6;
-            }
+        /* Tabelas Estilizadas sem Saturação */
+        QTableWidget {
+            background-color: rgba(18, 18, 18, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            gridline-color: rgba(255, 255, 255, 0.06);
+            color: #D4D4D4;
+            alternate-background-color: rgba(26, 26, 26, 0.5);
+        }
 
-            QLineEdit:disabled {
-                background-color: #E2E8F0;
-                color: #94A3B8;
-            }
+        QTableWidget::item {
+            padding: 6px;
+        }
 
-            /* ===== BOTÕES GERAIS ===== */
-            QPushButton {
-                background-color: #2563A6;
-                color: #FFFFFF;
-                border: 1px solid #2563A6;
-                border-radius: 7px;
-                padding: 10px 14px;
-                font-weight: bold;
-            }
+        QTableWidget::item:selected {
+            background-color: rgba(80, 80, 80, 0.5);
+            color: #FFFFFF;
+        }
 
-            QPushButton:hover {
-                background-color: #1D4F85;
-                border-color: #1D4F85;
-            }
+        /* Cabeçalho de Tabelas */
+        QHeaderView::section {
+            background-color: rgba(30, 30, 30, 0.9);
+            color: #CCCCCC;
+            padding: 8px;
+            font-weight: bold;
+            border: none;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.15);
+        }
 
-            QPushButton:pressed {
-                background-color: #163B64;
-            }
+        /* Barra de Rolagem Neutra */
+        QScrollBar:vertical {
+            background: rgba(20, 20, 20, 0.4);
+            width: 8px;
+            margin: 0px;
+            border-radius: 4px;
+        }
 
-            QPushButton:disabled {
-                background-color: #CBD5E1;
-                color: #64748B;
-                border-color: #CBD5E1;
-            }
+        QScrollBar::handle:vertical {
+            background: rgba(70, 70, 70, 0.5);
+            min-height: 20px;
+            border-radius: 4px;
+        }
 
-            /* ===== TABELAS ===== */
-            QTableWidget {
-                background-color: #FFFFFF;
-                alternate-background-color: #F1F5F9;
-                color: #243447;
-                border: 1px solid #D8E2EE;
-                border-radius: 7px;
-                gridline-color: #E2E8F0;
-                selection-background-color: #DCEBFA;
-                selection-color: #142D4E;
-            }
+        QScrollBar::handle:vertical:hover {
+            background: rgba(100, 100, 100, 0.7);
+        }
 
-            QTableWidget::item {
-                padding: 5px;
-            }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            border: none;
+            background: none;
+        }
 
-            QTableWidget::item:selected {
-                background-color: #DCEBFA;
-                color: #142D4E;
-            }
+        /* Caixas de Seleção (QCheckBox) */
+        QCheckBox {
+            color: #CCCCCC;
+            background: transparent;
+            spacing: 8px;
+        }
 
-            QHeaderView::section {
-                background-color: #203F63;
-                color: #FFFFFF;
-                padding: 9px;
-                border: none;
-                font-weight: bold;
-            }
+        QCheckBox::indicator {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background-color: rgba(20, 20, 20, 0.6);
+        }
 
-            /* ===== FORMULÁRIOS DE CADASTRO ===== */
-            #cadastro {
-                background-color: #FFFFFF;
-                border: 1px solid #D8E2EE;
-                border-radius: 12px;
-            }
+        QCheckBox::indicator:checked {
+            background-color: #777777;
+            border: 1px solid #999999;
+        }
 
-            #login {
-                background-color: #FFFFFF;
-                border: 1px solid #D8E2EE;
-                border-radius: 12px;
-            }
-
-            #cadastroCliente {
-                background-color: #FFFFFF;
-                border: 1px solid #D8E2EE;
-                border-radius: 12px;
-            }
-
-            #cadastroCliente QLabel {
-                background-color: transparent;
-                color: #243447;
-            }
-
-            #cadastroCliente QLineEdit {
-                background-color: #F8FAFC;
-                color: #243447;
-                border: 1px solid #CBD5E1;
-                border-radius: 7px;
-                padding: 10px;
-            }
-
-            #cadastroCliente QLineEdit:focus {
-                border: 1px solid #2563A6;
-            }
-
-            /* ===== INDICADORES DE ESTATÍSTICAS ===== */
-            #valor {
-                background-color: transparent;
-                color: #1D4F85;
-                font-size: 20px;
-                font-weight: bold;
-            }
-
-            /* ===== BARRAS DE ROLAGEM ===== */
-            QScrollBar:vertical {
-                background-color: #E2E8F0;
-                width: 10px;
-                margin: 0;
-                border-radius: 5px;
-            }
-
-            QScrollBar::handle:vertical {
-                background-color: #94A3B8;
-                min-height: 25px;
-                border-radius: 5px;
-            }
-
-            QScrollBar::handle:vertical:hover {
-                background-color: #2563A6;
-            }
-
-            QScrollBar::add-line:vertical,
-            QScrollBar::sub-line:vertical {
-                height: 0;
-            }
-
-            QScrollBar:horizontal {
-                background-color: #E2E8F0;
-                height: 10px;
-                margin: 0;
-                border-radius: 5px;
-            }
-
-            QScrollBar::handle:horizontal {
-                background-color: #94A3B8;
-                min-width: 25px;
-                border-radius: 5px;
-            }
-
-            QScrollBar::handle:horizontal:hover {
-                background-color: #2563A6;
-            }
-
-            QScrollBar::add-line:horizontal,
-            QScrollBar::sub-line:horizontal {
-                width: 0;
-            }
-
-            /* ===== MENSAGENS E SELEÇÃO ===== */
-            QMessageBox {
-                background-color: #F1F5F9;
-                color: #243447;
-            }
-
-            QPlainTextEdit {
-                background-color: #FFFFFF;
-                color: #243447;
-                border: 1px solid #D8E2EE;
-                border-radius: 7px;
-                padding: 12px;
-                selection-background-color: #DCEBFA;
-                selection-color: #142D4E;
-            }
-        """)
-        pass
+        /* Modais */
+        QMessageBox {
+            background-color: #161616;
+            color: #CCCCCC;
+        }
+        """
+        self.setStyleSheet(QSS_AZUL_MONOCROMATICO_GLASS)
 
 
 if __name__ == "__main__":
