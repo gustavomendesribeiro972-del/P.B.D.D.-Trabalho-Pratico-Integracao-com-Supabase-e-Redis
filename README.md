@@ -158,6 +158,11 @@ Interface Grafica Nativa do Windows com, utilizo da conexão:
 
     app_buscar_funcionario_por_cpf,  #Presente na página de Login / Perfil
     
-##### *SQLAlchemy:*
-Biblioteca que faz a comunicação Python<->SQL (pgAdmin4/ postgreSQL)
+##### *SQLAlchemy e pyscopg:*
+Bibliotecas que fazem a comunicação Python<->SUPABASE SQL (pgAdmin4/ postgreSQL)
+
+
+
+### Redis:
+Consultas com chaves, baseados nas Views, Functions, Procedures e outros elementos da SUPABASE.
 
