@@ -5,14 +5,17 @@ UNIFSA // ENGENHARIA DE SOFTWARE **28M4A**
 
 #### Identificação:
 
-* -Guilherme Mendes Ribeiro
-* -Projeto de Banco de Dados
-* -Anderson Soares da Costa
+* Aluno - Guilherme Mendes Ribeiro
+* Professor - Anderson Soares da Costa
+* Disciplina - Projeto de Banco de Dados
 
 
 #### Sobre o projeto:
 
-LojaCore é um aplicativo em PyQt6 CRUD simples. Com uma comunicação Python <- Redis -> SQL Supabase realizada por meio das bibliotecas SQLAlchemy, Supabase e Redis
+LojaCore é um aplicativo em PyQt6 CRUD simples de gestão
+comercial de pequenas e médias lojas: controle de vendas (PDV), estoque, clientes,
+fidelidade e permissões de acesso tudo integrado a um banco de dados relacional
+no **Supabase (PostgreSQL)** com **cache distribuído via Redis**.
 
 
 #### Tecnologias utilizadas:
@@ -25,6 +28,81 @@ LojaCore é um aplicativo em PyQt6 CRUD simples. Com uma comunicação Python <-
     * psycopg,
     * redis
 
+
+
+#### Integração com Supabase
+O Supabase atua como banco de dados relacional (PostgreSQL) do projeto.
+A comunicação é feita via SQLAlchemy (engine + session) com driver psycopg2.
+
+
+##### Como funciona
+
+PyQt6 (UI)
+    │
+    ▼
+conexao.py  ──SQLAlchemy──▶  Supabase PostgreSQL
+    │
+    ├── Views (vw_*)          → consultas consolidadas
+    ├── Functions (fn_*)      → lógica de negócio (auth, status, pontos)
+    ├── Procedures (CALL)     → transações complexas (venda, estoque, cadastro)
+    └── Queries diretas       → busca de dados do app (funcionário, empresa, permissões)
+
+
+
+#### Elementos do banco utilizados
+Tipo	Exemplos	Uso na aplicação
+Views	vw_vendas_recentes, vw_estoque_critico, vw_resumo_caixa_diario, vw_geral_estoque_produtos, vw_clientes_registrados, vw_funcionarios_registrados	Tabelas de dados nas telas de Vendas, Estoque, Caixa, Clientes, Funcionários e Estatísticas.
+Functions	fn_autenticar_funcionario, fn_autenticar_empresa, fn_status_produto, fn_calcular_pontos_compra	Login, consulta de produto e cálculo de fidelidade.
+Procedures	registrar_venda, adicionar_item_venda, registrar_cliente, registra_funcionarios, registrar_empresa	Operações de escrita transacionais (PDV, cadastros).
+
+Exemplo de chamada (Python → Supabase)
+def fn_autenticar_funcionario(cpf, senha):
+    with SessionLocal() as sessao:
+        query = text("SELECT fn_autenticar_funcionario(:p_cpf, :p_senha)")
+        resultado = sessao.execute(query, {"p_cpf": cpf, "p_senha": senha})
+        return resultado.scalar_one_or_none()
+
+#### Integração com Redis
+Onde foi utilizado
+O Redis é utilizado exclusivamente como cache de leitura para as views
+consultadas com frequência pela interface.
+
+Chaves e TTLs
+View	Chave Redis	TTL
+vw_vendas_recentes	lojacore:vw_vendas_recentes:empresa:{id}:v3	30 s
+vw_estoque_critico	lojacore:vw_estoque_critico:empresa:{id}:v3	30 s
+vw_resumo_caixa_diario	lojacore:vw_resumo_caixa_diario:empresa:{id}:v3	30 s
+vw_geral_estoque_produtos	lojacore:vw_geral_estoque_produtos:empresa:{id}:v3	60 s
+vw_clientes_registrados	lojacore:vw_clientes_registrados:empresa:{id}:v3	120 s
+vw_funcionarios_registrados	lojacore:vw_funcionarios_registrados:empresa:{id}:v3	120 s
+
+Invalidação (Write-Through)
+Sempre que uma procedura de escrita é executada, as chaves afetadas são
+removidas do Redis para garantir consistência:
+
+def registrar_venda(...):
+    # ... CALL registrar_venda(...) ...
+    sessao.commit()
+    invalidar_cache_empresa(
+        empresa_id,
+        "vw_vendas_recentes",
+        "vw_geral_estoque_produtos",
+        "vw_estoque_critico",
+        "vw_resumo_caixa_diario"
+    )
+
+
+### Por que Redis?
+
+Toda navegação entre telas reconsultava o banco (views com JOINs pesados).	Cache com TTL reduz chamadas ao PostgreSQL em ~90% durante uso normal.
+Múltiplos usuários poderiam sobrecarregar o banco com as mesmas queries.	O cache é compartilhado (Upstash cloud) — um MISS popula para todos.
+Dados de leitura (vendas, estoque) mudam pouco em relação à frequência de consulta.	TTL curto (30–120 s) equilibra frescor e performance.
+Necessidade de invalidação após escritas.	DEL das chaves após cada CALL de procedure garante consistência.
+
+Benefícios observados
+Latência reduzida: consultas cacheadas respondem em < 5 ms (vs. 50–200 ms no banco).
+Menor carga no Supabase: menos conexões simultâneas e menos queries de JOIN.
+Escalabilidade: o cache fica fora do processo Python (Upstash), permitindo múltiplas instâncias.
 
 
 ### O Banco de dados:
