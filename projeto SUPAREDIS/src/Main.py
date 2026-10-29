@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect
 )
 from pathlib import Path
-
+#OBS, PARA CONTINUAR A TESTAR E CORRIGIR.
 BASE_DIR = Path(__file__).resolve().parent
 ICONE = BASE_DIR / "icon.jpeg"
 
@@ -95,6 +95,8 @@ def validar_email(email):
 def formatar_moeda(valor):
     """Formata um valor numérico como moeda brasileira."""
     try:
+        if isinstance(valor, str):
+            valor = valor.replace(".", "").replace(",", ".") if "," in valor else valor
         numero = Decimal(str(valor))
         if not numero.is_finite():
             return str(valor)
@@ -410,7 +412,6 @@ class TelaEmpresa(QWidget):
         cnpj = self.cnpj_login.text().strip()
         senha = self.senha_login.text()
 
-        # 1. Validar os campos
         if not cnpj or not senha:
             QMessageBox.warning(
                 self,
@@ -420,7 +421,7 @@ class TelaEmpresa(QWidget):
             return
 
         try:
-            # 2. Autenticar a empresa no banco de dados
+            print("autenticando com o banco...")
             autenticado = fn_autenticar_empresa(cnpj, senha)
 
             if not autenticado:
@@ -433,7 +434,6 @@ class TelaEmpresa(QWidget):
                 self.senha_login.setFocus()
                 return
 
-            # 3. Buscar os dados da empresa após autenticar
             dados_empresa = app_buscar_empresa_por_cnpj(cnpj)
 
             if not dados_empresa:
@@ -455,35 +455,20 @@ class TelaEmpresa(QWidget):
                 )
                 return
 
-            # 4. Verificar se a empresa possui funcionários
-            tem_funcionarios = app_empresa_tem_funcionarios(
-                empresa_id
-            )
-
-            # 5. Iniciar a sessão somente após autenticação
             SessaoEmpresa.iniciar_sessao(dados_empresa)
+            tem_funcionarios = app_empresa_tem_funcionarios(int(empresa_id))
 
-            self.cadastro_admin_obrigatorio = not tem_funcionarios
-
-            # Limpar os campos de login
             self.cnpj_login.clear()
             self.senha_login.clear()
 
-            # 6. Direcionar conforme o estado da empresa
-            if self.cadastro_admin_obrigatorio:
+            if not tem_funcionarios:
                 QMessageBox.information(
                     self,
                     "Primeiro acesso",
                     "Esta empresa ainda não possui funcionários. "
                     "Cadastre o administrador inicial para continuar."
                 )
-
                 self.stack.setCurrentIndex(2)
-
-                pagina_principal = self.stack.widget(2)
-                if pagina_principal:
-                    pagina_principal.abrir_pagina("cadastrar_funcionario")
-
             else:
                 self.stack.setCurrentIndex(1)
 
@@ -563,11 +548,19 @@ class TelaCadastroFun(QWidget):
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        btn_voltar = QPushButton("← Voltar")
-        btn_voltar.setMinimumHeight(40)
-        btn_voltar.clicked.connect(self.voltar_acao)
-        layout.addWidget(btn_voltar)
+        # 1. Criar o botão
+        self.btn_acao = QPushButton()
+        self.btn_acao.setMinimumHeight(40)
+        self.btn_acao.clicked.connect(self.acao_botao)
+        layout.addWidget(self.btn_acao)
 
+        # 2. Definir o texto (agora self.btn_acao já existe)
+        if self.sub_stack is None and self.app_stack is not None:
+            self.btn_acao.setText("✕ Cancelar")
+        else:
+            self.btn_acao.setText("← Voltar")
+
+        # 3. Resto do formulário
         frame = QFrame()
         frame.setFixedSize(657, 588)
         frame.setObjectName("cadastro")
@@ -604,32 +597,36 @@ class TelaCadastroFun(QWidget):
         botao_cadastrar.setMinimumHeight(45)
         botao_cadastrar.clicked.connect(self.realizar_cadastro)
 
-        for widget in (
-            titulo,
-            self.usuario,
-            self.cpf,
-            self.telefone,
-            self.email,
-            self.senha,
-            botao_cadastrar,
-        ):
+        for widget in (titulo, self.usuario, self.cpf, self.telefone,
+                       self.email, self.senha, botao_cadastrar):
             frame_layout.addWidget(widget)
 
         layout.addWidget(frame)
 
-    def voltar_acao(self):
-        if self.eh_cadastro_admin_inicial():
-            if self.app_stack:
-                self.app_stack.setCurrentIndex(1)  # Vai para o login de funcionário
+    def esta_no_fluxo_inicial(self):
+        return self.sub_stack is None and self.app_stack is not None
+
+    def acao_botao(self):
+        if self.esta_no_fluxo_inicial():
+            SessaoEmpresa.encerrar_sessao()
+            SessaoUsuario.encerrar_sessao()
+            self.app_stack.setCurrentIndex(0)  # TelaEmpresa
         else:
-            self.sub_stack.setCurrentIndex(0)  # Volta para o menu principal interno
+            if self.sub_stack:
+                self.sub_stack.setCurrentIndex(0)
+            elif self.app_stack:
+                self.app_stack.setCurrentIndex(1)  # TelaLoginFun
+
+    def atualizar_botao(self):
+        if self.esta_no_fluxo_inicial():
+            self.btn_acao.setText("✕ Cancelar")
+        else:
+            self.btn_acao.setText("← Voltar")
 
     def eh_cadastro_admin_inicial(self):
-        """Retorna True se a empresa ainda não possui nenhum funcionário cadastrado."""
         empresa = SessaoEmpresa.obter_empresa()
         if not empresa or empresa.get("empresa_id") is None:
             return False
-        
         try:
             empresa_id = int(empresa["empresa_id"])
             return not app_empresa_tem_funcionarios(empresa_id)
@@ -715,12 +712,21 @@ class TelaCadastroFun(QWidget):
             self.email.clear()
             self.senha.clear()
 
-            # Redirecionamento correto
-            if eh_admin_inicial:
+            if self._esta_no_fluxo_inicial():
+                # Primeiro acesso: ir para login do funcionário (index 1)
+                QMessageBox.information(self, "Sucesso",
+                    "Administrador inicial cadastrado!\nFaça login com o CPF e senha.")
+                self.app_stack.setCurrentIndex(1)  # TelaLoginFun
+            elif eh_admin_inicial:
+                # Admin inicial dentro do sistema: ir para login do funcionário
+                QMessageBox.information(self, "Sucesso",
+                    "Administrador inicial cadastrado! Faça login.")
                 if self.app_stack:
-                    self.app_stack.setCurrentIndex(1)  # Vai para a tela de login da empresa
+                    self.app_stack.setCurrentIndex(1)
             else:
-                self.sub_stack.setCurrentIndex(0)  # Retorna ao menu interno principal
+                # Cadastro normal dentro do sistema: voltar ao menu
+                if self.sub_stack:
+                    self.sub_stack.setCurrentIndex(0)
 
         except Exception as e:
             QMessageBox.critical(self, "Erro ao cadastrar funcionário", f"Não foi possível cadastrar:\n{e}")
@@ -781,10 +787,25 @@ class TelaLoginFun(QWidget):
         SessaoUsuario.encerrar_sessao()
         SessaoEmpresa.encerrar_sessao()
 
+        # Remover TelaPrincipalSistema se existir
+        app_janela = None
+        ancestral = self.parent()
+        while ancestral:
+            if isinstance(ancestral, LojaCoreApp):
+                app_janela = ancestral
+                break
+            ancestral = ancestral.parent()
+
+        if app_janela and app_janela.tela_principal is not None:
+            idx = app_janela.stack.indexOf(app_janela.tela_principal)
+            if idx != -1:
+                app_janela.stack.removeWidget(app_janela.tela_principal)
+                app_janela.tela_principal.deleteLater()
+                app_janela.tela_principal = None
+
         self.cpf.clear()
         self.senha.clear()
-
-        self.stack.setCurrentIndex(0)
+        self.stack.setCurrentIndex(0)  # TelaEmpresa
 
 
     def realizar_login(self):
@@ -792,104 +813,107 @@ class TelaLoginFun(QWidget):
         senha = self.senha.text()
 
         if not cpf or not senha:
-            QMessageBox.warning(
-                self, "Login", "Preencha o CPF e a senha."
-            )
+            QMessageBox.warning(self, "Login", "Preencha o CPF e a senha.")
             return
-
-        empresa = SessaoEmpresa.obter_empresa()
-
-        if not empresa or empresa.get("empresa_id") is None:
-            QMessageBox.warning(
-                self,
-                "Sessão expirada",
-                "Faça login na empresa primeiro."
-            )
-            self.stack.setCurrentIndex(0)
-            return     
-
-        empresa_id = int(empresa["empresa_id"])       
 
         try:
             autenticado = fn_autenticar_funcionario(cpf, senha)
 
             if not autenticado:
-                QMessageBox.warning(
-                    self, "Login", "CPF ou senha inválidos."
-                )
+                QMessageBox.warning(self, "Login", "CPF ou senha inválidos.")
                 self.senha.clear()
                 self.senha.setFocus()
                 return
 
+            empresa = SessaoEmpresa.obter_empresa()
+
+            if not empresa or empresa.get("empresa_id") is None:
+                QMessageBox.warning(self, "Sessão expirada",
+                    "Faça login na empresa primeiro.")
+                self.stack.setCurrentIndex(0)
+                return
+
+            empresa_id = int(empresa["empresa_id"])
+
             dados_funcionario = app_buscar_funcionario_por_cpf(cpf, empresa_id)
 
             if not dados_funcionario:
-                QMessageBox.warning(
-                    self,
-                    "Login",
-                    "Não foi possível carregar os dados do funcionário."
-                )
+                QMessageBox.warning(self, "Login",
+                    "Não foi possível carregar os dados do funcionário.")
                 return
 
-            # Impede o acesso de funcionários de outra empresa.
             funcionario_empresa_id = dados_funcionario.get("empresa_id")
 
             if funcionario_empresa_id is None:
-                QMessageBox.critical(
-                    self,
-                    "Erro",
-                    "A consulta do funcionário precisa retornar empresa_id."
-                )
+                QMessageBox.critical(self, "Erro",
+                    "A consulta do funcionário precisa retornar empresa_id.")
                 return
 
             if int(funcionario_empresa_id) != empresa_id:
-                QMessageBox.warning(
-                    self,
-                    "Acesso negado",
-                    "Este funcionário não pertence à empresa autenticada."
-                )
+                QMessageBox.warning(self, "Acesso negado",
+                    "Este funcionário não pertence à empresa autenticada.")
                 return
 
-            permissoes = app_buscar_permissoes_funcionario(
-                cpf,
-                empresa_id=empresa_id
-            )
+            permissoes = app_buscar_permissoes_funcionario(cpf, empresa_id=empresa_id)
 
             if permissoes is None:
-                QMessageBox.critical(
-                    self,
-                    "Erro",
-                    "Não foi possível carregar as permissões."
-                )
+                QMessageBox.critical(self, "Erro",
+                    "Não foi possível carregar as permissões.")
                 return
 
-            SessaoUsuario.iniciar_sessao(
-                dados_funcionario,
-                permissoes
-            )
+            SessaoUsuario.iniciar_sessao(dados_funcionario, permissoes)
 
             self.cpf.clear()
             self.senha.clear()
-            self.stack.setCurrentIndex(2)
 
-            QMessageBox.information(
-                self, "Login", "Login realizado com sucesso!"
-            )
+            # Cria e mostra a tela principal
+            self._abrir_tela_principal(empresa_id)
 
         except Exception as e:
             SessaoUsuario.encerrar_sessao()
+            QMessageBox.critical(self, "Erro de login",
+                f"Não foi possível realizar o login:\n{e}")
 
-            QMessageBox.critical(
-                self,
-                "Erro de login",
-                f"Não foi possível realizar o login:\n{e}"
+    def _abrir_tela_principal(self, empresa_id):
+        """Cria a TelaPrincipalSistema e adiciona ao app_stack."""
+        # Encontrar a janela principal (LojaCoreApp)
+        app_janela = self.stack.parent()
+
+        if app_janela is None:
+            QMessageBox.critical(self, "Erro",
+                "Não foi possível encontrar a janela principal.")
+            return
+
+        # Remover instância anterior (evita vazamento)
+        if hasattr(app_janela, "tela_principal") and app_janela.tela_principal is not None:
+            idx = self.stack.indexOf(app_janela.tela_principal)
+            if idx != -1:
+                self.stack.removeWidget(app_janela.tela_principal)
+                app_janela.tela_principal.deleteLater()
+                app_janela.tela_principal = None
+
+        try:
+            app_janela.tela_principal = TelaPrincipalSistema(
+                empresa_id=empresa_id,
+                app_stack=self.stack
             )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Erro",
+                f"Falha ao criar a tela principal:\n{e}")
+            return
+
+        self.stack.addWidget(app_janela.tela_principal)
+        self.stack.setCurrentWidget(app_janela.tela_principal)
 
 
 class TelaEstatisticas(QWidget):
-    def __init__(self, sub_stack):
-        super().__init__()
-        self.sub_stack = sub_stack
+    def __init__(self, empresa_id, parent=None):
+        super().__init__(parent)
+        self.empresa_id = empresa_id
+        self.sub_stack = parent
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
@@ -917,31 +941,68 @@ class TelaEstatisticas(QWidget):
         label_tabela.setFont(QFont("Arial", 12, QFont.Weight.Bold))
         layout.addWidget(label_tabela)
 
-        self.tabela_geral = QTableWidget()
-        self.tabela_geral.setColumnCount(10)
-        self.tabela_geral.setHorizontalHeaderLabels([
-            "ID Produto",
-            "ID Variação",
-            "Nome do Produto",
-            "SKU",
-            "ID Categoria",
-            "Estoque Disponível",
-            "Estoque Mínimo",
-            "Status",
-            "Custo Padrão",
-            "Venda Base"
-        ])
-        self.tabela_geral.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
-
-        self.tabela_geral.horizontalHeader().setStretchLastSection(True)
-        self.tabela_geral.setMinimumHeight(300)
+        self.tabela_geral = QTableWidget() 
         self.tabela_geral.setAlternatingRowColors(True)
-        self.tabela_geral.setWordWrap(True)
-        self.tabela_geral.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
+        self.tabela_geral.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tabela_geral.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.tabela_geral.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.tabela_geral) 
+        
+        try:
+            dados_gerais = vw_geral_estoque_produtos(empresa_id) or []
+            registros = []
+
+            for registro in dados_gerais:
+                if isinstance(registro, dict):
+                    registros.append(registro)
+                else:
+                    registros.append(dict(enumerate(registro)))
+
+            if registros:
+                print("verificando registros...")
+                colunas = list(registros[0].keys())
+
+                self.tabela_geral.clear()
+                self.tabela_geral.setColumnCount(len(colunas))
+                self.tabela_geral.setHorizontalHeaderLabels(
+                    [str(coluna) for coluna in colunas]
+                )
+                self.tabela_geral.setRowCount(len(registros))
+
+                for linha, registro in enumerate(registros):
+                    for coluna, nome_coluna in enumerate(colunas):
+                        valor = registro.get(nome_coluna)
+
+                        chave = str(nome_coluna).lower()
+                        monetario = any(
+                            termo in chave
+                            for termo in (
+                                "custo", "preco", "preço",
+                                "valor", "venda"
+                            )
+                        )
+
+                        if valor is None:
+                            texto = "—"
+                        elif monetario and isinstance(
+                            valor, (int, float, Decimal)
+                        ):
+                            texto = formatar_moeda(valor)
+                        else:
+                            texto = str(valor)
+
+                        item = QTableWidgetItem(texto)
+                        self.tabela_geral.setItem(linha, coluna, item)
+
+                self.tabela_geral.resizeColumnsToContents()
+                print("tabela_geral inicializada...")
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Erro nas estatísticas",
+                f"Não foi possível carregar o estoque:\n{e}"
+            )
 
         layout.addWidget(self.tabela_geral)
 
@@ -961,16 +1022,60 @@ class TelaEstatisticas(QWidget):
 
         layout.addLayout(botoes_layout)
 
-        # Carrega as estatísticas ao inicializar
-        self.carregar_dados_estatisticas()
+
+    def preencher_tabela(self, tabela, dados):
+        registros = []
+
+        for registro in dados or []:
+            if hasattr(registro, "_mapping"):
+                registro = dict(registro._mapping)
+            elif isinstance(registro, dict):
+                registro = dict(registro)
+            elif isinstance(registro, (tuple, list)):
+                registro = {
+                    f"Campo {i + 1}": valor
+                    for i, valor in enumerate(registro)
+                }
+            else:
+                registro = {"Registro": str(registro)}
+
+            registros.append(registro)
+
+        tabela.clearContents()
+
+        if not registros:
+            tabela.setRowCount(0)
+            tabela.setColumnCount(0)
+            return
+
+        colunas = list(registros[0].keys())
+
+        tabela.setColumnCount(len(colunas))
+        tabela.setHorizontalHeaderLabels(
+            [str(coluna) for coluna in colunas]
+        )
+        tabela.setRowCount(len(registros))
+
+        for linha, registro in enumerate(registros):
+            for coluna, nome_coluna in enumerate(colunas):
+                valor = registro.get(nome_coluna)
+                texto = "—" if valor is None else str(valor)
+
+                tabela.setItem(
+                    linha,
+                    coluna,
+                    QTableWidgetItem(texto)
+                )
+
+        tabela.resizeColumnsToContents()
 
     def obter_empresa_id(self):
         empresa = SessaoEmpresa.obter_empresa()
-
-        if not empresa or empresa.get("empresa_id") is None:
-            return None
-
-        return int(empresa["empresa_id"])
+        if empresa and empresa.get("empresa_id") is not None:
+            return int(empresa["empresa_id"])
+        if self.empresa_id is not None:
+            return int(self.empresa_id)
+        return None
 
     def criar_card(self, titulo, valor_inicial):
         """Cria um card visual estilizado para exibir métricas."""
@@ -1095,29 +1200,16 @@ class TelaVendas(QWidget):
         self.tabela = QTableWidget()
         self.tabela.setColumnCount(8)
         self.tabela.setHorizontalHeaderLabels([
-            "ID Venda",
-            "Nº Cupom",
-            "ID Cliente",
-            "ID Funcionário",
-            "Operador",
-            "Total",
-            "Status",
-            "Data e Hora"
+            "ID Venda", "Nº Cupom", "ID Cliente", "ID Funcionário",
+            "Operador", "Total", "Status", "Data e Hora"
         ])
 
-        self.tabela.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
+        self.tabela.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.tabela.horizontalHeader().setStretchLastSection(True)
-        self.tabela.verticalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
-
+        self.tabela.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.tabela.setMinimumHeight(300)
         self.tabela.setAlternatingRowColors(True)
-        self.tabela.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
+        self.tabela.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         layout.addWidget(self.tabela)
 
@@ -1129,13 +1221,16 @@ class TelaVendas(QWidget):
         btn_voltar.clicked.connect(lambda: self.sub_stack.setCurrentIndex(0))
         layout.addWidget(btn_voltar)
 
-        self.carregar_vendas()
+        # REMOVIDO: self.carregar_vendas() não deve ser chamado no __init__!
 
     def carregar_vendas(self):
         self.tabela.setRowCount(0)
 
         empresa = SessaoEmpresa.obter_empresa()
         if not empresa or empresa.get("empresa_id") is None:
+            QMessageBox.warning(
+                self, "Sessão expirada", "Faça login na empresa antes de consultar as vendas."
+            )
             return
 
         empresa_id = int(empresa["empresa_id"])
@@ -1145,53 +1240,40 @@ class TelaVendas(QWidget):
             self.tabela.setRowCount(len(dados))
 
             for linha, registro in enumerate(dados):
-                #se vier dicionario:
-                if hasattr(registro, "_mapping"):
-                    registro = list(registro._mapping.values())
-                elif isinstance(registro, dict):
-                    registro = list(registro.values())
+                if isinstance(registro, dict):
+                    valores = list(registro.values())
+                else:
+                    valores = registro
 
                 for coluna, valor in enumerate(registro):
                     if coluna >= self.tabela.columnCount():
                         break
 
                     if coluna == 5 and valor is not None:
-                        # Total da venda em reais.
                         texto = formatar_moeda(valor)
-
                     elif coluna == 7 and valor is not None:
-                        # Data e hora em formato legível.
                         if hasattr(valor, "strftime"):
                             texto = valor.strftime("%d/%m/%Y %H:%M:%S")
                         else:
                             texto = str(valor)
-
                     elif valor is None:
                         texto = "—"
-
                     else:
                         texto = str(valor)
 
                     item = QTableWidgetItem(texto)
-
                     if coluna in (0, 2, 3, 5):
-                        item.setTextAlignment(
-                            Qt.AlignmentFlag.AlignRight
-                            | Qt.AlignmentFlag.AlignVCenter
-                        )
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
                     self.tabela.setItem(linha, coluna, item)
 
         except Exception as e:
             QMessageBox.critical(
-                self,
-                "Erro ao carregar vendas",
-                f"Não foi possível consultar as vendas recentes:\n{e}"
+                self, "Erro ao carregar vendas", f"Não foi possível consultar as vendas recentes:\n{e}"
             )
 
 
 class TelaEstoqueProdutos(QWidget):
-
     def __init__(self, sub_stack):
         super().__init__()
         self.sub_stack = sub_stack
@@ -1204,67 +1286,42 @@ class TelaEstoqueProdutos(QWidget):
         titulo.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         layout.addWidget(titulo)
 
-        layout.addWidget(
-            QLabel("Produtos com Estoque Crítico:")
-        )
+        layout.addWidget(QLabel("Produtos com Estoque Crítico:"))
 
         self.tabela_critico = QTableWidget()
         self.tabela_critico.setColumnCount(10)
         self.tabela_critico.setHorizontalHeaderLabels([
-            "ID Produto",
-            "Nome do Produto",
-            "ID Variação",
-            "SKU",
-            "Tamanho",
-            "Cor",
-            "Código de Barras",
-            "Estoque Atual",
-            "Estoque Mínimo",
-            "Necessidade de Reposição"
+            "ID Produto", "Nome do Produto", "ID Variação", "SKU", "Tamanho",
+            "Cor", "Código de Barras", "Estoque Atual", "Estoque Mínimo", "Necessidade de Reposição"
         ])
 
         self.tabela_critico.setAlternatingRowColors(True)
-
-        self.tabela_critico.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
-
-        self.tabela_critico.verticalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
-
+        self.tabela_critico.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.tabela_critico.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.tabela_critico.setMinimumHeight(300)
-
-        self.tabela_critico.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
-
-        self.tabela_critico.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
+        self.tabela_critico.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.tabela_critico.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         layout.addWidget(self.tabela_critico)
 
         btn_atualizar = QPushButton("Atualizar Estoque")
-        btn_atualizar.clicked.connect(
-            self.carregar_estoque_critico
-        )
+        btn_atualizar.clicked.connect(self.carregar_estoque_critico)
         layout.addWidget(btn_atualizar)
 
         btn_voltar = QPushButton("Voltar ao Menu Principal")
-        btn_voltar.clicked.connect(
-            lambda: self.sub_stack.setCurrentIndex(0)
-        )
+        btn_voltar.clicked.connect(lambda: self.sub_stack.setCurrentIndex(0))
         layout.addWidget(btn_voltar)
 
-        self.carregar_estoque_critico()
+        # REMOVIDO: self.carregar_estoque_critico() não deve rodar no __init__!
 
     def carregar_estoque_critico(self):
         self.tabela_critico.setRowCount(0)
 
         empresa = SessaoEmpresa.obter_empresa()
-
         if not empresa or empresa.get("empresa_id") is None:
+            QMessageBox.warning(
+                self, "Sessão expirada", "Faça login na empresa antes de consultar o estoque."
+            )
             return
 
         empresa_id = int(empresa["empresa_id"])
@@ -1281,14 +1338,11 @@ class TelaEstoqueProdutos(QWidget):
 
         except Exception as e:
             QMessageBox.critical(
-                self,
-                "Erro ao carregar estoque",
-                f"Não foi possível carregar o estoque crítico:\n{e}"
+                self, "Erro ao carregar estoque", f"Não foi possível carregar o estoque crítico:\n{e}"
             )
 
 
 class TelaCaixaDiario(QWidget):
-
     def __init__(self, sub_stack):
         super().__init__()
         self.sub_stack = sub_stack
@@ -1303,13 +1357,9 @@ class TelaCaixaDiario(QWidget):
 
         self.texto_resumo = QPlainTextEdit()
         self.texto_resumo.setReadOnly(True)
-        self.texto_resumo.setLineWrapMode(
-            QPlainTextEdit.LineWrapMode.WidgetWidth
-        )
+        self.texto_resumo.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.texto_resumo.setFont(QFont("Consolas", 11))
-        self.texto_resumo.setPlainText(
-            "Carregando resumo do caixa..."
-        )
+        self.texto_resumo.setPlainText("Clique em 'Atualizar Resumo' para carregar os dados...")
         layout.addWidget(self.texto_resumo)
 
         btn_atualizar = QPushButton("Atualizar Resumo")
@@ -1317,22 +1367,21 @@ class TelaCaixaDiario(QWidget):
         layout.addWidget(btn_atualizar)
 
         btn_voltar = QPushButton("Voltar ao Menu Principal")
-        btn_voltar.clicked.connect(
-            lambda: self.sub_stack.setCurrentIndex(0)
-        )
+        btn_voltar.clicked.connect(lambda: self.sub_stack.setCurrentIndex(0))
         layout.addWidget(btn_voltar)
 
-        self.carregar_caixa()
+        # REMOVIDO: self.carregar_caixa() não deve rodar no __init__!
 
     def carregar_caixa(self):
-        self.texto_resumo.setPlainText("Carregando resumo do caixa...")
-
         empresa = SessaoEmpresa.obter_empresa()
         if not empresa or empresa.get("empresa_id") is None:
-            self.texto_resumo.setPlainText("Sessão da empresa não encontrada.")
+            QMessageBox.warning(
+                self, "Sessão expirada", "Faça login na empresa antes de consultar o resumo do caixa."
+            )
             return
 
-        empresa_id = int(empresa["empresa_id"])        
+        empresa_id = int(empresa["empresa_id"])
+        self.texto_resumo.setPlainText("Carregando resumo do caixa...")
 
         try:
             dados = vw_resumo_caixa_diario(empresa_id) or []
@@ -1341,43 +1390,32 @@ class TelaCaixaDiario(QWidget):
 
         except Exception as e:
             self.texto_resumo.setPlainText(
-                "Não foi possível carregar o resumo do caixa.\n\n"
-                f"Detalhes: {e}"
+                f"Não foi possível carregar o resumo do caixa.\n\nDetalhes: {e}"
             )
-
-            print(f"Erro ao carregar resumo do caixa: {e}")
 
 
 class TelaCadastrosPontos(QWidget):
-
     def __init__(self, sub_stack):
         super().__init__()
         self.sub_stack = sub_stack
 
-        # Layout principal da página
         layout_principal = QVBoxLayout(self)
         layout_principal.setContentsMargins(30, 25, 30, 25)
         layout_principal.setSpacing(12)
 
-        # Área superior: botão de voltar à esquerda
         layout_topo = QHBoxLayout()
         btn_voltar = QPushButton("← Menu Principal")
         btn_voltar.setFixedSize(145, 35)
         btn_voltar.clicked.connect(lambda: self.sub_stack.setCurrentIndex(0))
-
         layout_topo.addWidget(btn_voltar, alignment=Qt.AlignmentFlag.AlignLeft)
         layout_topo.addStretch()
         layout_principal.addLayout(layout_topo)
 
-        # Centralização vertical e horizontal do conteúdo
         layout_principal.addStretch()
 
         layout_central = QVBoxLayout()
-        layout_central.setAlignment(
-            Qt.AlignmentFlag.AlignHCenter
-        )
+        layout_central.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        # Contêiner semelhante às telas de Cadastro e Login
         self.frame = QFrame()
         self.frame.setObjectName("cadastroCliente")
         self.frame.setFixedWidth(500)
@@ -1386,43 +1424,30 @@ class TelaCadastrosPontos(QWidget):
         frame_layout.setContentsMargins(30, 25, 30, 25)
         frame_layout.setSpacing(15)
 
-        # Título
         titulo = QLabel("Cadastro de Clientes")
         titulo.setFont(QFont("Arial", 22, QFont.Weight.Bold))
         titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         frame_layout.addWidget(titulo)
 
-        descricao = QLabel(
-            "Preencha os dados para cadastrar um novo cliente."
-        )
+        descricao = QLabel("Preencha os dados para cadastrar um novo cliente.")
         descricao.setWordWrap(True)
         descricao.setAlignment(Qt.AlignmentFlag.AlignCenter)
         frame_layout.addWidget(descricao)
 
-        # Campo Nome
         self.input_nome_cliente = QLineEdit()
         self.input_nome_cliente.setPlaceholderText("Nome completo")
         self.input_nome_cliente.setMinimumHeight(42)
         frame_layout.addWidget(self.input_nome_cliente)
 
-        # Campo CPF
         self.input_cpf_cliente = QLineEdit()
         self.input_cpf_cliente.setPlaceholderText("CPF")
         self.input_cpf_cliente.setMinimumHeight(42)
         frame_layout.addWidget(self.input_cpf_cliente)
 
-        # Campo Email
         self.input_email_cliente = QLineEdit()
         self.input_email_cliente.setPlaceholderText("Email do cliente (Opcional)")
         self.input_email_cliente.setMinimumHeight(42)
         frame_layout.addWidget(self.input_email_cliente)
-
-        # Campo Data de Nascimento
-        self.check_sem_data = QPushButton("Não informar Data de Nascimento")
-        self.check_sem_data.setCheckable(True)
-        self.check_sem_data.setChecked(False)
-        self.check_sem_data.clicked.connect(self.alternar_data_nascimento)
-        frame_layout.addWidget(self.check_sem_data)
 
         self.input_data_nascimento = QDateEdit()
         self.input_data_nascimento.setCalendarPopup(True)
@@ -1444,71 +1469,96 @@ class TelaCadastrosPontos(QWidget):
         self.tabela_clientes.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tabela_clientes.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.tabela_clientes.horizontalHeader().setStretchLastSection(True)
-
         layout_principal.addWidget(self.tabela_clientes)
 
         btn_atualizar_clientes = QPushButton("Atualizar Lista de Clientes")
         btn_atualizar_clientes.clicked.connect(self.carregar_clientes)
         layout_principal.addWidget(btn_atualizar_clientes)
 
-        # Botão abaixo do contêiner
         layout_botoes = QHBoxLayout()
         layout_botoes.addStretch()
 
         btn_cad_cliente = QPushButton("Novo Cliente")
         btn_cad_cliente.setFixedSize(130, 35)
         btn_cad_cliente.clicked.connect(self.executar_cadastro_cliente)
-
         layout_botoes.addWidget(btn_cad_cliente)
         layout_botoes.addStretch()
 
         layout_principal.addLayout(layout_botoes)
         layout_principal.addStretch()
 
-    def alternar_data_nascimento(self):
-        """Ativa ou desativa o campo de data de nascimento conforme a escolha."""
-        marcado = self.check_sem_data.isChecked()
-        self.input_data_nascimento.setDisabled(marcado)
-        if marcado:
-            self.check_sem_data.setStyleSheet("background-color: #CBD5E1; color: #243447;")
-        else:
-            self.check_sem_data.setStyleSheet("")
+        # REMOVIDO: self.carregar_clientes() não deve rodar no __init__!
+
+    def carregar_clientes(self):
+        empresa = SessaoEmpresa.obter_empresa()
+        if not empresa or empresa.get("empresa_id") is None:
+            QMessageBox.warning(
+                self, "Sessão expirada", "Faça login na empresa antes de consultar os clientes."
+            )
+            return
+
+        empresa_id = int(empresa["empresa_id"])
+
+        try:
+            dados = vw_clientes_registrados(empresa_id) or []
+            registros = []
+
+            for registro in dados:
+                if hasattr(registro, "_mapping"):
+                    registro = dict(registro._mapping)
+                elif isinstance(registro, dict):
+                    registro = dict(registro)
+                elif isinstance(registro, (tuple, list)):
+                    registro = {f"Campo {i + 1}": valor for i, valor in enumerate(registro)}
+                else:
+                    registro = {"Registro": str(registro)}
+
+                registros.append(registro)
+
+            if not registros:
+                self.tabela_clientes.clear()
+                self.tabela_clientes.setRowCount(0)
+                self.tabela_clientes.setColumnCount(0)
+                return
+
+            colunas = list(registros[0].keys())
+
+            self.tabela_clientes.clear()
+            self.tabela_clientes.setColumnCount(len(colunas))
+            self.tabela_clientes.setHorizontalHeaderLabels(colunas)
+            self.tabela_clientes.setRowCount(len(registros))
+
+            for linha, registro in enumerate(registros):
+                for coluna, nome in enumerate(colunas):
+                    valor = registro.get(nome)
+                    texto = "—" if valor is None else str(valor)
+                    self.tabela_clientes.setItem(linha, coluna, QTableWidgetItem(texto))
+
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Erro ao carregar clientes", f"Não foi possível consultar os clientes:\n{e}"
+            )
 
     def executar_cadastro_cliente(self):
         nome = self.input_nome_cliente.text().strip()
         cpf = self.input_cpf_cliente.text().strip()
         email = self.input_email_cliente.text().strip()
-
-        # Permite cadastrar sem informar a data de nascimento.
-        if self.check_sem_data.isChecked():
-            data_nascimento = None
-        else:
-            data_nascimento = (
-                self.input_data_nascimento.date()
-                .toString("yyyy-MM-dd")
-            )
+        data_nascimento = self.input_data_nascimento.date().toString("yyyy-MM-dd")
 
         if not nome or not cpf:
-            QMessageBox.warning(
-                self,
-                "Atenção",
-                "Preencha o nome e o CPF do cliente."
-            )
+            QMessageBox.warning(self, "Atenção", "Preencha o nome e o CPF do cliente.")
             return
 
         empresa = SessaoEmpresa.obter_empresa()
-
         if not empresa or empresa.get("empresa_id") is None:
             QMessageBox.warning(
-                self,
-                "Sessão da empresa",
-                "Faça login na empresa antes de cadastrar clientes."
+                self, "Sessão da empresa", "Faça login na empresa antes de cadastrar clientes."
             )
             return
 
-        try:
-            empresa_id = int(empresa["empresa_id"])
+        empresa_id = int(empresa["empresa_id"])
 
+        try:
             sucesso, mensagem = cadastrar_cliente(
                 empresa_id=empresa_id,
                 nome=nome,
@@ -1518,90 +1568,242 @@ class TelaCadastrosPontos(QWidget):
             )
 
             if not sucesso:
-                QMessageBox.warning(self, "Erro", str(mensagem))
+                QMessageBox.critical(self, "Erro", mensagem)
                 return
 
-            QMessageBox.information(
-                self, "Sucesso", str(mensagem)
-            )
-
+            QMessageBox.information(self, "Sucesso", mensagem)
             self.input_nome_cliente.clear()
             self.input_cpf_cliente.clear()
             self.input_email_cliente.clear()
-
-            self.check_sem_data.setChecked(False)
-            self.alternar_data_nascimento()
-
-            self.input_data_nascimento.setDate(
-                QDate.currentDate().addYears(-18)
-            )
+            self.input_data_nascimento.setDate(QDate.currentDate().addYears(-18))
 
             self.carregar_clientes()
 
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Erro ao cadastrar cliente",
-                f"Não foi possível cadastrar o cliente:\n{e}"
+            QMessageBox.critical(self, "Erro", f"Erro ao cadastrar cliente:\n{e}")
+
+
+class TelaPrincipalSistema(QWidget):
+    def __init__(self, parent=None, app_stack=None):
+        super().__init__(parent)
+        self.app_stack = app_stack
+        self.init_ui()
+
+    def init_ui(self):
+        self.sub_stack = QStackedWidget(self)
+
+        # ===== MENU PRINCIPAL =====
+        main_dashboard = QWidget()
+        main_layout = QHBoxLayout(main_dashboard)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(20)
+
+        # ===== PAINEL LATERAL =====
+        painel = QFrame()
+        painel.setObjectName("painelLateral")
+        painel.setFixedWidth(210)
+
+        painel_layout = QVBoxLayout(painel)
+        painel_layout.setContentsMargins(12, 16, 12, 16)
+        painel_layout.setSpacing(12)
+
+        self.lbl_icone = QLabel()
+        self.lbl_icone.setObjectName("iconeLoja")
+        self.lbl_icone.setFixedSize(120, 100)
+        self.lbl_icone.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        pixmap = QPixmap(str(ICONE))
+        if not pixmap.isNull():
+            self.lbl_icone.setPixmap(
+                pixmap.scaled(90, 90, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
             )
+        else:
+            self.lbl_icone.setText("LojaCore")
 
-    def carregar_clientes(self):
+        painel_layout.addWidget(self.lbl_icone, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        nome_loja = QLabel("LojaCore")
+        nome_loja.setObjectName("nomeLoja")
+        nome_loja.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        painel_layout.addWidget(nome_loja)
+
+        painel_layout.addSpacing(12)
+
+        self.btn_perfil = QPushButton("  Perfil")
+        self.btn_perfil.setMinimumHeight(42)
+        self.btn_perfil.clicked.connect(self.abrir_perfil)
+        painel_layout.addWidget(self.btn_perfil)
+
+        btn_conexao = QPushButton("  Testar conexão")
+        btn_conexao.setMinimumHeight(42)
+        btn_conexao.clicked.connect(self.executar_teste_conexao)
+        painel_layout.addWidget(btn_conexao)
+
+        painel_layout.addStretch()
+
+        # ===== ÁREA DE CONTEÚDO =====
+        conteudo = QWidget()
+        conteudo_layout = QVBoxLayout(conteudo)
+        conteudo_layout.setContentsMargins(0, 0, 0, 0)
+        conteudo_layout.setSpacing(12)
+
+        titulo = QLabel("Painel Principal")
+        titulo.setObjectName("tituloPagina")
+        conteudo_layout.addWidget(titulo)
+
+        subtitulo = QLabel("Selecione uma das opções para continuar.")
+        subtitulo.setObjectName("subtitulo")
+        conteudo_layout.addWidget(subtitulo)
+
+        grade = QGridLayout()
+        grade.setSpacing(16)
+
+        opcoes = [
+            ("Vendas Recentes", "Consultar as vendas", "vendas"),
+            ("Estoque e Produtos", "Consultar estoque crítico", "estoque"),
+            ("Caixa Diário", "Ver resumo do caixa", "caixa"),
+            ("Clientes e Pontos", "Gerenciar clientes", "cadastros"),
+            ("Registrar Venda", "Lançar uma nova venda", "registrar_venda"),
+            ("Status do Produto", "Consultar um produto", "status_produto"),
+            ("Calcular Pontos", "Calcular pontos da compra", "pontos"),
+            ("Estatísticas", "Indicadores do sistema", "estatisticas"),
+            ("Funcionários", "Consultar funcionários cadastrados", "funcionarios"),
+        ]
+
+        for i, (nome, descricao, chave) in enumerate(opcoes):
+            card = QFrame()
+            card.setObjectName("cardMenu")
+
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(16, 16, 16, 16)
+            card_layout.setSpacing(8)
+
+            lbl_nome = QLabel(nome)
+            lbl_nome.setObjectName("tituloCard")
+
+            lbl_descricao = QLabel(descricao)
+            lbl_descricao.setObjectName("descricaoCard")
+            lbl_descricao.setWordWrap(True)
+
+            btn = QPushButton("Abrir página")
+            btn.setMinimumHeight(38)
+            btn.clicked.connect(lambda checked=False, k=chave: self.abrir_pagina(k))
+
+            card_layout.addWidget(lbl_nome)
+            card_layout.addWidget(lbl_descricao)
+            card_layout.addStretch()
+            card_layout.addWidget(btn)
+
+            grade.addWidget(card, i // 2, i % 2)
+
+        conteudo_layout.addLayout(grade)
+        conteudo_layout.addStretch()
+
+        main_layout.addWidget(painel)
+        main_layout.addWidget(conteudo, 1)
+
+        # ===== INSTANCIAR AS PÁGINAS =====
+        self.paginas = {}
+
+        def adicionar_pagina(chave, widget):
+            self.paginas[chave] = widget
+            self.sub_stack.addWidget(widget)
+
+        adicionar_pagina("inicio", main_dashboard)
+        adicionar_pagina("perfil", TelaPerfil(self.sub_stack, self.app_stack))
+        adicionar_pagina("vendas", TelaVendas(self.sub_stack))
+        adicionar_pagina("estoque", TelaEstoqueProdutos(self.sub_stack))
+        adicionar_pagina("caixa", TelaCaixaDiario(self.sub_stack))
+        adicionar_pagina("cadastros", TelaCadastrosPontos(self.sub_stack))
+        adicionar_pagina("funcionarios", TelaFuncionarios(self.sub_stack))
+        adicionar_pagina("estatisticas", TelaEstatisticas(self.sub_stack))
+        adicionar_pagina("registrar_venda", TelaRegistrarVenda(self.sub_stack))
+        adicionar_pagina("status_produto", TelaStatusProduto(self.sub_stack))
+        adicionar_pagina("pontos", TelaCalcularPontos(self.sub_stack))
+
+        layout_global = QVBoxLayout(self)
+        layout_global.setContentsMargins(0, 0, 0, 0)
+        layout_global.addWidget(self.sub_stack)
+
+        self.sub_stack.setCurrentWidget(main_dashboard)
+
+    def obter_empresa_id(self):
         empresa = SessaoEmpresa.obter_empresa()
-
         if not empresa or empresa.get("empresa_id") is None:
+            QMessageBox.warning(
+                self, "Sessão expirada", "Faça login na empresa antes de acessar esta página."
+            )
+            self.app_stack.setCurrentIndex(0)
+            return None
+
+        return int(empresa["empresa_id"])
+
+    def abrir_pagina(self, chave):
+
+        if chave == "cadastrar_funcionario":
+            empresa = SessaoEmpresa.obter_empresa()
+            if empresa and empresa.get("empresa_id") is not None:
+                if not app_empresa_tem_funcionarios(int(empresa["empresa_id"])):
+                    # Zero funcionários → sem permissão necessária
+                    pass
+                elif not SessaoUsuario.tem_permissao("GERENCIAR_FUNCIONARIOS"):
+                    QMessageBox.warning(self, "Acesso negado", "Permissão necessária.")
+                    return
+        else:
+            permissao = permissoes_por_pagina.get(chave)
+            if permissao and not SessaoUsuario.tem_permissao(permissao):
+                QMessageBox.warning(self, "Acesso negado", f"Permissão {permissao} necessária.")
+                return
+            
+        permissoes_por_pagina = {
+            "funcionarios": "GERENCIAR_FUNCIONARIOS",
+            "cadastros": "GERENCIAR_CLIENTES",
+            "registrar_venda": "REALIZAR_VENDAS",
+            "status_produto": "GERENCIAR_PRODUTOS",
+            "estoque": "GERENCIAR_PRODUTOS",
+        }
+
+        permissao = permissoes_por_pagina.get(chave)
+        if permissao and not SessaoUsuario.tem_permissao(permissao):
+            QMessageBox.warning(
+                self, "Acesso negado", f"Você não possui a permissão {permissao}."
+            )
             return
 
+        pagina = self.paginas.get(chave)
+        if pagina is not None:
+            self.sub_stack.setCurrentWidget(pagina)
+
+            # Aciona o carregamento com a empresa logada ao navegar para a página:
+            if chave == "vendas":
+                pagina.carregar_vendas()
+            elif chave == "estoque":
+                pagina.carregar_estoque_critico()
+            elif chave == "caixa":
+                pagina.carregar_caixa()
+            elif chave == "cadastros":
+                pagina.carregar_clientes()
+            elif chave == "funcionarios":
+                pagina.carregar_funcionarios()
+            elif chave == "estatisticas":
+                pagina.carregar_dados_estatisticas()
+
+    def atualizar_dados_perfil(self):
+        self.paginas["perfil"].carregar_dados_usuario()
+
+    def abrir_perfil(self):
+        self.atualizar_dados_perfil()
+        self.abrir_pagina("perfil")
+
+    def executar_teste_conexao(self):
         try:
-            empresa_id = int(empresa["empresa_id"])
-            dados = vw_clientes_registrados(empresa_id) or []
-
-            registros = []
-
-            for registro in dados:
-                if hasattr(registro, "_mapping"):
-                    registro = dict(registro._mapping)
-                elif isinstance(registro, dict):
-                    registro = dict(registro)
-                elif isinstance(registro, (tuple, list)):
-                    registro = {
-                        f"Campo {i + 1}": valor
-                        for i, valor in enumerate(registro)
-                    }
-                else:
-                    registro = {"Registro": str(registro)}
-
-                registros.append(registro)
-
-            self.tabela_clientes.clear()
-
-            if not registros:
-                self.tabela_clientes.setRowCount(0)
-                self.tabela_clientes.setColumnCount(0)
-                return
-
-            colunas = list(registros[0].keys())
-
-            self.tabela_clientes.setColumnCount(len(colunas))
-            self.tabela_clientes.setHorizontalHeaderLabels(colunas)
-            self.tabela_clientes.setRowCount(len(registros))
-
-            for linha, registro in enumerate(registros):
-                for coluna, nome_coluna in enumerate(colunas):
-                    valor = registro.get(nome_coluna)
-                    texto = "—" if valor is None else str(valor)
-
-                    self.tabela_clientes.setItem(
-                        linha,
-                        coluna,
-                        QTableWidgetItem(texto)
-                    )
-
+            sucesso, mensagem = testar_conexao()
+            if sucesso:
+                QMessageBox.information(self, "Teste de conexão", mensagem)
+            else:
+                QMessageBox.warning(self, "Falha na conexão", mensagem)
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Erro ao carregar clientes",
-                f"Não foi possível consultar os clientes:\n{e}"
-            )
+            QMessageBox.critical(self, "Falha na conexão", f"Não foi possível testar a conexão:\n{e}")
 
 
 class TelaPerfil(QWidget):
@@ -1672,27 +1874,56 @@ class TelaPerfil(QWidget):
         )
 
     def fazer_logout_empresa(self):
+        """Logout da empresa → volta para TelaEmpresa (index 0)."""
         SessaoEmpresa.encerrar_sessao()
         SessaoUsuario.encerrar_sessao()
 
-        QMessageBox.information(
-            self,
-            "Logout",
-            "Sessão encerrada com sucesso."
-        )
+        # Remover a TelaPrincipalSistema do app_stack
+        if self.app_stack is not None:
+            app_janela = None
+            ancestral = self.parent()
+            while ancestral:
+                if isinstance(ancestral, LojaCoreApp):
+                    app_janela = ancestral
+                    break
+                ancestral = ancestral.parent()
 
-        self.app_stack.setCurrentIndex(0)
+            if app_janela and app_janela.tela_principal is not None:
+                idx = app_janela.stack.indexOf(app_janela.tela_principal)
+                if idx != -1:
+                    app_janela.stack.removeWidget(app_janela.tela_principal)
+                    app_janela.tela_principal.deleteLater()
+                    app_janela.tela_principal = None
+
+        QMessageBox.information(self, "Logout", "Sessão encerrada com sucesso.")
+
+        if self.app_stack is not None:
+            self.app_stack.setCurrentIndex(0)  # TelaEmpresa
 
     def fazer_logout(self):
         SessaoUsuario.encerrar_sessao()
 
-        QMessageBox.information(
-            self,
-            "Logout",
-            "Sessão encerrada com sucesso."
-        )
+        # Remover a TelaPrincipalSistema do app_stack
+        if self.app_stack is not None:
+            app_janela = None
+            ancestral = self.parent()
+            while ancestral:
+                if isinstance(ancestral, LojaCoreApp):
+                    app_janela = ancestral
+                    break
+                ancestral = ancestral.parent()
 
-        self.app_stack.setCurrentIndex(1)
+            if app_janela and app_janela.tela_principal is not None:
+                idx = app_janela.stack.indexOf(app_janela.tela_principal)
+                if idx != -1:
+                    app_janela.stack.removeWidget(app_janela.tela_principal)
+                    app_janela.tela_principal.deleteLater()
+                    app_janela.tela_principal = None
+
+        QMessageBox.information(self, "Logout", "Sessão encerrada com sucesso.")
+
+        if self.app_stack is not None:
+            self.app_stack.setCurrentIndex(1)  # TelaLoginFun
 
 
 class TelaFuncionarios(QWidget):
@@ -1788,23 +2019,53 @@ class TelaFuncionarios(QWidget):
 
 
 
+
 class TelaPrincipalSistema(QWidget):
 
-    def __init__(self, parent=None, app_stack=None):
+    def __init__(self, parent=None, app_stack=None, empresa_id=None):
         super().__init__(parent)
+
+        print("[DEBUG] -> Entrou no __init__ da TelaPrincipalSistema")
+
         self.app_stack = app_stack
-        self.init_ui()
+        self.empresa_id = empresa_id
+        self.paginas = {}
+        self.sub_stack = None
+
+        try:
+            self.init_ui()
+            print(
+                "[DEBUG] -> init_ui da TelaPrincipalSistema "
+                "executado com sucesso!"
+            )
+        except Exception as e:
+            import traceback
+
+            print(f"[ERRO CRÍTICO EM init_ui]: {e}")
+            traceback.print_exc()
+
+            QMessageBox.critical(
+                self,
+                "Erro ao abrir o sistema",
+                f"Não foi possível montar a tela principal:\n{e}"
+            )
 
     def init_ui(self):
+        print("[DEBUG] Criando QStackedWidget interno (sub_stack)...")
+
         self.sub_stack = QStackedWidget(self)
 
-        # ===== MENU PRINCIPAL =====
+        # ==================================================
+        # DASHBOARD PRINCIPAL
+        # ==================================================
         main_dashboard = QWidget()
         main_layout = QHBoxLayout(main_dashboard)
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(20)
 
-        # ===== PAINEL LATERAL =====
+        # ==================================================
+        # PAINEL LATERAL
+        # ==================================================
         painel = QFrame()
         painel.setObjectName("painelLateral")
         painel.setFixedWidth(210)
@@ -1813,13 +2074,11 @@ class TelaPrincipalSistema(QWidget):
         painel_layout.setContentsMargins(12, 16, 12, 16)
         painel_layout.setSpacing(12)
 
-        # Espaço para o ícone/logotipo.
         self.lbl_icone = QLabel()
         self.lbl_icone.setObjectName("iconeLoja")
         self.lbl_icone.setFixedSize(120, 100)
         self.lbl_icone.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Coloque icon.jpeg na pasta do programa.
         pixmap = QPixmap(str(ICONE))
 
         if not pixmap.isNull():
@@ -1833,7 +2092,7 @@ class TelaPrincipalSistema(QWidget):
             )
         else:
             self.lbl_icone.setText("LojaCore")
-            print(f"Ícone não encontrado ou inválido: {ICONE}")
+            print(f"[AVISO] Ícone não encontrado ou inválido: {ICONE}")
 
         painel_layout.addWidget(
             self.lbl_icone,
@@ -1859,7 +2118,9 @@ class TelaPrincipalSistema(QWidget):
 
         painel_layout.addStretch()
 
-        # ===== ÁREA DE CONTEÚDO =====
+        # ==================================================
+        # ÁREA DE CONTEÚDO
+        # ==================================================
         conteudo = QWidget()
         conteudo_layout = QVBoxLayout(conteudo)
         conteudo_layout.setContentsMargins(0, 0, 0, 0)
@@ -1879,16 +2140,56 @@ class TelaPrincipalSistema(QWidget):
         grade.setSpacing(16)
 
         opcoes = [
-            ("Vendas Recentes", "Consultar as vendas", "vendas"),
-            ("Estoque e Produtos", "Consultar estoque crítico", "estoque"),
-            ("Caixa Diário", "Ver resumo do caixa", "caixa"),
-            ("Clientes e Pontos", "Gerenciar clientes", "cadastros"),
-            ("Registrar Venda", "Lançar uma nova venda", "registrar_venda"),
-            ("Status do Produto", "Consultar um produto", "status_produto"),
-            ("Calcular Pontos", "Calcular pontos da compra", "pontos"),
-            ("Estatísticas", "Indicadores do sistema", "estatisticas"),
-            ("Funcionários", "Consultar funcionários cadastrados", "funcionarios"),
-            ("Novo Funcionario", "Cadastrar funcionários ou admins", "cadastrar_funcionario")
+            (
+                "Vendas Recentes",
+                "Consultar as vendas",
+                "vendas"
+            ),
+            (
+                "Estoque e Produtos",
+                "Consultar estoque crítico",
+                "estoque"
+            ),
+            (
+                "Caixa Diário",
+                "Ver resumo do caixa",
+                "caixa"
+            ),
+            (
+                "Clientes e Pontos",
+                "Gerenciar clientes",
+                "cadastros"
+            ),
+            (
+                "Registrar Venda",
+                "Lançar uma nova venda",
+                "registrar_venda"
+            ),
+            (
+                "Status do Produto",
+                "Consultar um produto",
+                "status_produto"
+            ),
+            (
+                "Calcular Pontos",
+                "Calcular pontos da compra",
+                "pontos"
+            ),
+            (
+                "Estatísticas",
+                "Indicadores do sistema",
+                "estatisticas"
+            ),
+            (
+                "Funcionários",
+                "Consultar funcionários cadastrados",
+                "funcionarios"
+            ),
+            (
+                "Novo Funcionário",
+                "Cadastrar funcionários ou administradores",
+                "cadastrar_funcionario"
+            ),
         ]
 
         for i, (nome, descricao, chave) in enumerate(opcoes):
@@ -1908,6 +2209,8 @@ class TelaPrincipalSistema(QWidget):
 
             btn = QPushButton("Abrir página")
             btn.setMinimumHeight(38)
+
+            # Captura a chave correta de cada botão.
             btn.clicked.connect(
                 lambda checked=False, k=chave: self.abrir_pagina(k)
             )
@@ -1925,76 +2228,158 @@ class TelaPrincipalSistema(QWidget):
         main_layout.addWidget(painel)
         main_layout.addWidget(conteudo, 1)
 
-        # ===== INSTANCIAR AS PÁGINAS =====
+        # ==================================================
+        # REGISTRO DAS PÁGINAS
+        # ==================================================
         self.paginas = {}
 
         def adicionar_pagina(chave, widget):
+            if widget is None:
+                raise ValueError(
+                    f"A página '{chave}' não foi criada."
+                )
+
+            print(f"[DEBUG] -> Adicionando página '{chave}'...")
+
             self.paginas[chave] = widget
             self.sub_stack.addWidget(widget)
 
         adicionar_pagina("inicio", main_dashboard)
+
+        # Perfil
         adicionar_pagina(
-            "perfil", TelaPerfil(self.sub_stack, self.app_stack)
+            "perfil",
+            TelaPerfil(self.sub_stack, self.app_stack)
         )
-        adicionar_pagina("vendas", TelaVendas(self.sub_stack))
+
+        # Vendas
         adicionar_pagina(
-            "estoque", TelaEstoqueProdutos(self.sub_stack)
+            "vendas",
+            TelaVendas(self.sub_stack)
         )
-        adicionar_pagina("caixa", TelaCaixaDiario(self.sub_stack))
+
         adicionar_pagina(
-            "cadastros", TelaCadastrosPontos(self.sub_stack)
+            "registrar_venda",
+            TelaRegistrarVenda(
+                sub_stack = self.sub_stack,
+                empresa_id=self.obter_empresa_id(),
+            )
         )
+
+        # Estoque e produtos
+        adicionar_pagina(
+            "estoque",
+            TelaEstoqueProdutos(self.sub_stack)
+        )
+
+        adicionar_pagina(
+            "status_produto",
+            TelaStatusProduto(self.sub_stack)
+        )
+
+        # Caixa
+        adicionar_pagina(
+            "caixa",
+            TelaCaixaDiario(self.sub_stack)
+        )
+
+        # Clientes e pontos
+        adicionar_pagina(
+            "cadastros",
+            TelaCadastrosPontos(self.sub_stack)
+        )
+
+        adicionar_pagina(
+            "pontos",
+            TelaCalcularPontos(self.sub_stack)
+        )
+
+        # Funcionários
         adicionar_pagina(
             "funcionarios",
             TelaFuncionarios(self.sub_stack)
         )
+
         adicionar_pagina(
             "cadastrar_funcionario",
-            TelaCadastroFun(self.sub_stack, app_stack=self.app_stack)
-        )
-        adicionar_pagina(
-            "estatisticas", TelaEstatisticas(self.sub_stack)
-        )
-        adicionar_pagina(
-            "registrar_venda", TelaRegistrarVenda(self.sub_stack)
-        )
-        adicionar_pagina(
-            "status_produto", TelaStatusProduto(self.sub_stack)
-        )
-        adicionar_pagina(
-            "pontos", TelaCalcularPontos(self.sub_stack)
+            TelaCadastroFun(
+                self.sub_stack,
+                app_stack=self.app_stack
+            )
         )
 
+        # Estatísticas
+        adicionar_pagina(
+            "estatisticas",
+            TelaEstatisticas(
+                empresa_id=self.obter_empresa_id(),
+                parent=self.sub_stack
+            )
+        )
+
+        # ==================================================
+        # LAYOUT GLOBAL
+        # ==================================================
         layout_global = QVBoxLayout(self)
         layout_global.setContentsMargins(0, 0, 0, 0)
         layout_global.addWidget(self.sub_stack)
 
-        self.sub_stack.setCurrentWidget(main_dashboard)
+        self.sub_stack.setCurrentWidget(
+            self.paginas["inicio"]
+        )
 
+        print(
+            "[DEBUG] TelaPrincipalSistema configurada "
+            "inteiramente com sucesso."
+        )
+
+    # ======================================================
+    # IDENTIFICAÇÃO DA EMPRESA
+    # ======================================================
     def obter_empresa_id(self):
         empresa = SessaoEmpresa.obter_empresa()
 
-        if not empresa:
-            QMessageBox.warning(
-                self,
-                "Sessão expirada",
-                "Faça login na empresa antes de acessar esta página."
-            )
+        # Prioriza a sessão ativa.
+        if empresa:
+            empresa_id = empresa.get("empresa_id")
+
+            if empresa_id is not None:
+                try:
+                    return int(empresa_id)
+                except (TypeError, ValueError):
+                    QMessageBox.critical(
+                        self,
+                        "Erro de sessão",
+                        "O identificador da empresa é inválido."
+                    )
+                    return None
+
+        # Permite utilizar o ID recebido pelo construtor.
+        if self.empresa_id is not None:
+            try:
+                return int(self.empresa_id)
+            except (TypeError, ValueError):
+                QMessageBox.critical(
+                    self,
+                    "Erro",
+                    "O identificador da empresa informado é inválido."
+                )
+                return None
+
+        QMessageBox.warning(
+            self,
+            "Sessão expirada",
+            "Faça login na empresa antes de acessar esta página."
+        )
+
+        if self.app_stack is not None:
             self.app_stack.setCurrentIndex(0)
-            return None
 
-        empresa_id = empresa.get("empresa_id")
+        return None
 
-        if empresa_id is None:
-            QMessageBox.critical(
-                self,
-                "Erro",
-                "Não foi possível identificar a empresa da sessão."
-            )
-            return None
-
-        return int(empresa_id)
-
+    # ======================================================
+    # VERIFICAÇÃO DE PERMISSÕES
+    # ======================================================
     def verificar_permissao(self, permissao):
         if not SessaoUsuario.tem_permissao(permissao):
             QMessageBox.warning(
@@ -2006,173 +2391,243 @@ class TelaPrincipalSistema(QWidget):
 
         return True
 
+    # ======================================================
+    # NAVEGAÇÃO ENTRE PÁGINAS
+    # ======================================================
     def abrir_pagina(self, chave):
-        empresa = SessaoEmpresa.obter_empresa()
-        if not empresa or empresa.get("empresa_id") is None:
-            QMessageBox.warning(
-                self,
-                "Sessão expirada",
-                "Faça login na empresa antes de acessar os módulos do sistema."
-            )
-            self.app_stack.setCurrentIndex(0)  # Retorna para a tela de login da empresa
-            return
-        
         permissoes_por_pagina = {
-                "funcionarios": "GERENCIAR_FUNCIONARIOS",
-                "cadastrar_funcionario": "GERENCIAR_FUNCIONARIOS",
-                "cadastros": "GERENCIAR_CLIENTES",
-                "registrar_venda": "REALIZAR_VENDAS",
-                "status_produto": "GERENCIAR_PRODUTOS",
-                "estoque": "GERENCIAR_PRODUTOS"
-            }
+            "funcionarios": "GERENCIAR_FUNCIONARIOS",
+            "cadastrar_funcionario": "GERENCIAR_FUNCIONARIOS",
+            "cadastros": "GERENCIAR_CLIENTES",
+            "registrar_venda": "REALIZAR_VENDAS",
+            "status_produto": "GERENCIAR_PRODUTOS",
+            "estoque": "GERENCIAR_PRODUTOS",
+        }
+
+        # Exige uma sessão de empresa para acessar os módulos.
+        empresa = SessaoEmpresa.obter_empresa()
+
+        if not empresa or empresa.get("empresa_id") is None:
+            # Permite o ID explicitamente recebido pelo construtor.
+            if self.empresa_id is None:
+                QMessageBox.warning(
+                    self,
+                    "Sessão expirada",
+                    "Faça login na empresa antes de acessar "
+                    "os módulos do sistema."
+                )
+
+                if self.app_stack is not None:
+                    self.app_stack.setCurrentIndex(0)
+                return
 
         permissao = permissoes_por_pagina.get(chave)
-
-        if permissao and not SessaoUsuario.tem_permissao(permissao):
-            QMessageBox.warning(
-                self,
-                "Acesso negado",
-                f"Você não possui a permissão {permissao}."
-            )
+        if permissao and not self.verificar_permissao(permissao):
+            QMessageBox.warning(self, "Acesso negado", f"Você não possui a permissão {permissao}.")
             return
 
         pagina = self.paginas.get(chave)
+        if pagina is None:
+            QMessageBox.warning(
+                self,
+                "Página não encontrada",
+                f"A página '{chave}' não está registrada no sistema."
+            )
+            return
 
-        if pagina is not None:
-            self.sub_stack.setCurrentWidget(pagina)
+        self.sub_stack.setCurrentWidget(pagina)
 
-            if chave == "funcionarios":
-                pagina.carregar_funcionarios()
-            elif chave == "cadastros":
-                pagina.carregar_clientes()
-            elif chave == "estoque":
-                pagina.carregar_estoque_critico()
-            elif chave == "vendas":
-                pagina.carregar_vendas()
-            elif chave == "caixa":
-                pagina.carregar_caixa()
-            elif chave == "estatisticas":
-                pagina.carregar_dados_estatisticas()
+        # Carrega os dados quando a página é aberta.
+        metodos_carregamento = {
+            "vendas": "carregar_vendas",
+            "estoque": "carregar_estoque_critico",
+            "caixa": "carregar_caixa",
+            "cadastros": "carregar_clientes",
+            "funcionarios": "carregar_funcionarios",
+            "estatisticas": "carregar_dados_estatisticas",
+        }
 
+        metodo_nome = metodos_carregamento.get(chave)
+        if metodo_nome:
+            metodo = getattr(pagina, metodo_nome, None)
+            if callable(metodo):
+                try:
+                    metodo()
+                except Exception as e:
+                    import traceback
 
+                    print(
+                        f"[ERRO] Falha ao carregar '{chave}': {e}"
+                    )
+                    traceback.print_exc()
+
+                    QMessageBox.warning(
+                        self,
+                        "Erro ao carregar dados",
+                        f"Não foi possível carregar os dados "
+                        f"da página '{chave}':\n{e}"
+                    )
+
+    # ======================================================
+    # PERFIL DO USUÁRIO
+    # ======================================================
     def atualizar_dados_perfil(self):
-        self.paginas["perfil"].carregar_dados_usuario()
+        pagina = self.paginas.get("perfil")
 
+        if pagina is None:
+            QMessageBox.warning(
+                self,
+                "Erro",
+                "A tela de perfil não está disponível."
+            )
+            return False
+
+        metodo = getattr(
+            pagina,
+            "carregar_dados_usuario",
+            None
+        )
+
+        if callable(metodo):
+            try:
+                metodo()
+                return True
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "Erro ao carregar perfil",
+                    f"Não foi possível carregar os dados do perfil:\n{e}"
+                )
+                return False
+
+        return True
 
     def abrir_perfil(self):
-        self.atualizar_dados_perfil()
-        self.abrir_pagina("perfil")
+        if self.atualizar_dados_perfil():
+            self.abrir_pagina("perfil")
 
-
+    # ======================================================
+    # TESTE DE CONEXÃO
+    # ======================================================
     def executar_teste_conexao(self):
         try:
             sucesso, mensagem = testar_conexao()
 
             if sucesso:
                 QMessageBox.information(
-                    self, "Teste de conexão", mensagem
+                    self,
+                    "Teste de conexão",
+                    mensagem
                 )
             else:
                 QMessageBox.warning(
-                    self, "Falha na conexão", mensagem
+                    self,
+                    "Falha na conexão",
+                    mensagem
                 )
 
         except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+
             QMessageBox.critical(
                 self,
                 "Falha na conexão",
                 f"Não foi possível testar a conexão:\n{e}"
             )
 
+
 class TelaRegistrarVenda(QWidget):
-    def __init__(self, sub_stack):
-        super().__init__()
-        self.sub_stack = sub_stack
+    def __init__(self, sub_stack, empresa_id=None, parent=None):
+            super().__init__(parent)
+            self.sub_stack = sub_stack
+            self.empresa_id = empresa_id
 
-        principal = QVBoxLayout(self)
-        principal.setContentsMargins(30, 25, 30, 25)
-        principal.setSpacing(12)
+            principal = QVBoxLayout(self)
+            principal.setContentsMargins(30, 25, 30, 25)
+            principal.setSpacing(12)
 
-        topo = QHBoxLayout()
+            topo = QHBoxLayout()
 
-        btn_voltar = QPushButton("← Menu Principal")
-        btn_voltar.setFixedSize(145, 35)
-        btn_voltar.clicked.connect(
-            lambda: self.sub_stack.setCurrentIndex(0)
-        )
+            btn_voltar = QPushButton("← Menu Principal")
+            btn_voltar.setFixedSize(145, 35)
+            btn_voltar.clicked.connect(
+                lambda: self.sub_stack.setCurrentIndex(0)
+            )
 
-        topo.addWidget(btn_voltar)
-        topo.addStretch()
-        principal.addLayout(topo)
-        principal.addStretch()
+            topo.addWidget(btn_voltar)
+            topo.addStretch()
+            principal.addLayout(topo)
+            principal.addStretch()
 
-        self.frame = QFrame()
-        self.frame.setObjectName("cadastroCliente")
-        self.frame.setFixedWidth(500)
+            self.frame = QFrame()
+            self.frame.setObjectName("cadastroCliente")
+            self.frame.setFixedWidth(500)
 
-        formulario = QVBoxLayout(self.frame)
-        formulario.setContentsMargins(30, 25, 30, 25)
-        formulario.setSpacing(15)
+            formulario = QVBoxLayout(self.frame)
+            formulario.setContentsMargins(30, 25, 30, 25)
+            formulario.setSpacing(15)
 
-        titulo = QLabel("Registrar Venda")
-        titulo.setFont(QFont("Arial", 22, QFont.Weight.Bold))
-        titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        formulario.addWidget(titulo)
+            titulo = QLabel("Registrar Venda")
+            titulo.setFont(QFont("Arial", 22, QFont.Weight.Bold))
+            titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            formulario.addWidget(titulo)
 
-        descricao = QLabel(
-            "Preencha os dados para registrar uma venda."
-        )
-        descricao.setWordWrap(True)
-        descricao.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        formulario.addWidget(descricao)
+            descricao = QLabel(
+                "Preencha os dados para registrar uma venda."
+            )
+            descricao.setWordWrap(True)
+            descricao.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            formulario.addWidget(descricao)
 
-        self.cupom = QLineEdit()
-        self.cupom.setPlaceholderText("Cupom da venda")
-        self.cupom.setMinimumHeight(42)
-        formulario.addWidget(self.cupom)
+            self.cupom = QLineEdit()
+            self.cupom.setPlaceholderText("Cupom da venda")
+            self.cupom.setMinimumHeight(42)
+            formulario.addWidget(self.cupom)
 
-        self.cliente_id = QLineEdit()
-        self.cliente_id.setPlaceholderText(
-            "ID do cliente (opcional)"
-        )
-        self.cliente_id.setMinimumHeight(42)
-        formulario.addWidget(self.cliente_id)
+            self.cliente_id = QLineEdit()
+            self.cliente_id.setPlaceholderText(
+                "ID do cliente (opcional)"
+            )
+            self.cliente_id.setMinimumHeight(42)
+            formulario.addWidget(self.cliente_id)
 
-        self.subtotal = QLineEdit()
-        self.subtotal.setPlaceholderText(
-            "Subtotal (ex.: 150,00)"
-        )
-        self.subtotal.setMinimumHeight(42)
-        formulario.addWidget(self.subtotal)
+            self.subtotal = QLineEdit()
+            self.subtotal.setPlaceholderText(
+                "Subtotal (ex.: 150,00)"
+            )
+            self.subtotal.setMinimumHeight(42)
+            formulario.addWidget(self.subtotal)
 
-        self.desconto = QLineEdit()
-        self.desconto.setPlaceholderText(
-            "Desconto em % (ex.: 10)"
-        )
-        self.desconto.setMinimumHeight(42)
-        formulario.addWidget(self.desconto)
+            self.desconto = QLineEdit()
+            self.desconto.setPlaceholderText(
+                "Desconto em % (ex.: 10)"
+            )
+            self.desconto.setMinimumHeight(42)
+            formulario.addWidget(self.desconto)
 
-        self.obs = QLineEdit()
-        self.obs.setPlaceholderText("Observação (opcional)")
-        self.obs.setMinimumHeight(42)
-        formulario.addWidget(self.obs)
+            self.obs = QLineEdit()
+            self.obs.setPlaceholderText("Observação (opcional)")
+            self.obs.setMinimumHeight(42)
+            formulario.addWidget(self.obs)
 
-        principal.addWidget(
-            self.frame,
-            alignment=Qt.AlignmentFlag.AlignHCenter
-        )
+            principal.addWidget(
+                self.frame,
+                alignment=Qt.AlignmentFlag.AlignHCenter
+            )
 
-        botoes = QHBoxLayout()
-        botoes.addStretch()
+            botoes = QHBoxLayout()
+            botoes.addStretch()
 
-        btn_registrar = QPushButton("Registrar Venda")
-        btn_registrar.setFixedSize(160, 40)
-        btn_registrar.clicked.connect(self.registrar)
-        botoes.addWidget(btn_registrar)
+            btn_registrar = QPushButton("Registrar Venda")
+            btn_registrar.setFixedSize(160, 40)
+            btn_registrar.clicked.connect(self.registrar)
+            botoes.addWidget(btn_registrar)
 
-        botoes.addStretch()
-        principal.addLayout(botoes)
-        principal.addStretch()
+            botoes.addStretch()
+            principal.addLayout(botoes)
+            principal.addStretch()
 
     @staticmethod
     def converter_decimal(texto):
@@ -2278,7 +2733,7 @@ class TelaRegistrarVenda(QWidget):
                 for chave in chaves_id:
                     valor = usuario.get(chave)
 
-                    if valor is None:
+                    if valor is not None:
                         funcionario_id = valor
                         break
 
@@ -2543,25 +2998,53 @@ class TelaCalcularPontos(QWidget):
 class LojaCoreApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        print("DEBUG 1")
         self.setWindowTitle("LojaCore")
+        print("DEBUG 2")
         self.setWindowIcon(QIcon(str(ICONE)))
-        self.setFixedSize(1337, 768)
-
+        self.resize(1200, 700)
+        self.setMinimumSize(800, 600)
+        print("DEBUG 3")
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
-
+        print("DEBUG 4")
         self.tela_empresa = TelaEmpresa(self.stack)
         self.tela_login = TelaLoginFun(self.stack)
-        self.tela_principal = TelaPrincipalSistema(
+        print("DEBUG 5.5")
+        self.tela_cadastro_admin = TelaCadastroFun(
+            sub_stack=None,
             app_stack=self.stack
         )
-
+        print("DEBUG 5")
+        self.tela_principal = None
+        print("DEBUG 6")
         self.stack.addWidget(self.tela_empresa)
-        self.stack.addWidget(self.tela_login)       
-        self.stack.addWidget(self.tela_principal)  
-
+        print("tela login")
+        self.stack.addWidget(self.tela_login)
+        self.stack.addWidget(self.tela_cadastro_admin)      
+        print("tela principal")  
+        print("DEBUG 7")
         self.aplicar_estilo()
         self.stack.setCurrentIndex(0)
+
+    def abrir_tela_principal(self, empresa_id):
+        if empresa_id is None:
+            QMessageBox.warning(
+                self,
+                "Atenção",
+                "Não foi possível identificar a empresa."
+            )
+            return
+
+        if self.tela_principal is not None:
+            idx = self.stack.indexOf(self.tela_principal)
+            if idx != -1:
+                self.stack.removeWidget(self.tela_principal)
+                self.tela_principal.deleteLater()
+
+        self.tela_principal = TelaPrincipalSistema(empresa_id=empresa_id, app_stack=self.stack)
+        self.stack.addWidget(self.tela_principal)
+        self.stack.setCurrentWidget(self.tela_principal)
 
     def aplicar_estilo(self):
         QSS_AZUL_MONOCROMATICO_GLASS = """
@@ -2757,10 +3240,19 @@ if __name__ == "__main__":
         myappid = "unifsa.lojacore.v.1.0"
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
+    print("iniciando interface...")
+    try:
+        app = QApplication(sys.argv)
+        app.setStyle("Fusion")
 
-    window = LojaCoreApp()
-    window.show()
+        print("Iniciando Interface...")
+        window = LojaCoreApp()
+        window.show()
+        print("Interface iniciou...")
 
-    sys.exit(app.exec())
+        sys.exit(app.exec())
+    except Exception as e:
+        print(f"\n[ERRO CRÍTICO AO INICIAR O APLICATIVO]:\n{e}")
+        import traceback
+        traceback.print_exc()
+        input("\nPressione Enter para fechar...")
