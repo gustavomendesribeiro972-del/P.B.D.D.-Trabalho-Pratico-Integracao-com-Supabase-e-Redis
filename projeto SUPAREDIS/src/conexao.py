@@ -10,7 +10,7 @@ except ImportError:
     redis_client = None
 
 # Substitua pela sua URL de conexão real com o banco de dados
-DATABASE_URL = "postgresql://postgres:22MeuBem4A7bV13@db.zjbnogzcelpzljvcvkkx.supabase.co:5432/postgres"
+DATABASE_URL = "postgresql+psycopg://postgres:22MeuBem4A7bV13@db.zjbnogzcelpzljvcvkkx.supabase.co:5432/postgres"
 
 engine = create_engine(
     DATABASE_URL, echo=False, pool_pre_ping=True
@@ -37,9 +37,12 @@ def consultar_com_cache(chave, consulta, ttl=60):
         try:
             dados_cache = redis_client.get(chave)
             if dados_cache is not None:
+                print(f"[CACHE HIT] {chave}")
                 return json.loads(dados_cache)
+            else:
+                print(f"[CACHE MISS] {chave} → consultando banco...")
         except Exception as erro:
-            print(f"Redis indisponível na leitura do cache: {erro}")
+            print(f"[CACHE ERRO LEITURA] Redis indisponível na leitura do cache: {erro}")
 
     dados = consulta()
     dados_serializaveis = []
@@ -67,8 +70,9 @@ def consultar_com_cache(chave, consulta, ttl=60):
                 ),
                 ex=ttl
             )
+            print(f"[CACHE SET] {chave} (ttl={ttl}s, {len(dados_serializaveis)} registros)")
         except Exception as erro:
-            print(f"Redis indisponível na gravação do cache: {erro}")
+            print(f"[CACHE ERRO ESCRITA] {chave}: {erro}")
 
     return dados_serializaveis
 
@@ -78,7 +82,8 @@ def invalidar_cache(*chaves):
     if redis_client is not None:
         try:
             if chaves:
-                redis_client.delete(*chaves)
+                resultado = redis_client.delete(*chaves)
+                print(f"[CACHE INVALIDADO] {resultado} chave(s) removida(s): {chaves}")
         except Exception as erro:
             print(f"Não foi possível invalidar o cache: {erro}")
 
