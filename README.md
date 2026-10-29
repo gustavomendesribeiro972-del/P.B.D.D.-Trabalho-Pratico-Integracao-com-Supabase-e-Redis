@@ -12,16 +12,18 @@ UNIFSA // ENGENHARIA DE SOFTWARE **28M4A**
 
 #### Sobre o projeto:
 
-LojaCore é um aplicativo em PyQt6 CRUD simples. Com uma comunicação Python<->SQL Supabase realizada por meio da SQLAlchemy.
+LojaCore é um aplicativo em PyQt6 CRUD simples. Com uma comunicação Python <- Redis -> SQL Supabase realizada por meio das bibliotecas SQLAlchemy, Supabase e Redis
 
 
 #### Tecnologias utilizadas:
 
 * Supabase PostgreSQL;
+* Redis
 * Python:
     * PyQt6(Interface Grafica),
     * SQLAlchemy,
-    * psycopg
+    * psycopg,
+    * redis
 
 
 
