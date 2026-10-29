@@ -46,7 +46,9 @@ def consultar_com_cache(chave, consulta, ttl=60):
 
     for registro in dados or []:
         if hasattr(registro, "_mapping"):
-            registro = list(registro._mapping.values())
+            registro = dict(registro._mapping)
+        elif isinstance(registro, dict):
+            registro = dict(registro)
         elif isinstance(registro, (tuple, list)):
             registro = list(registro)
         else:
@@ -96,7 +98,7 @@ def invalidar_cache_empresa(empresa_id, *views):
     }
 
     chaves = [
-        f"lojacore:{nome}:empresa:{empresa_id}:v2"
+        f"lojacore:{nome}:empresa:{empresa_id}:v3"
         for nome in views
         if nome in nomes_permitidos
     ]
@@ -128,7 +130,7 @@ def _consultar_view_empresa(nome_view, empresa_id, ttl=60):
     if nome_view not in views_permitidas:
         raise ValueError("View não permitida.")
 
-    chave = f"lojacore:{nome_view}:empresa:{empresa_id}:v2"
+    chave = f"lojacore:{nome_view}:empresa:{empresa_id}:v3"
 
     def consultar_banco():
         with SessionLocal() as sessao:
@@ -204,7 +206,7 @@ def fn_autenticar_funcionario(cpf, senha):
 def fn_status_produto(produto_id):
     sessao = SessionLocal()
     try:
-        query = text("SELECT fn_status_produto(:p_produto_id);")
+        query = text("SELECT fn_status_produto(:p_produto_id)")
         resultado = sessao.execute(query, {"p_produto_id": produto_id})
         linha = resultado.fetchone()
         return linha[0] if linha else None
@@ -316,11 +318,12 @@ def registrar_venda(empresa_id: int, cupom: str, cliente_id: int | None, funcion
         sessao.close()
 
 
-def adicionar_item_venda(venda_id: int, variacao_id: int, quantidade: int, preco_unitario: float, desconto_item: float):
+def adicionar_item_venda(empresa_id: int, venda_id: int, variacao_id: int, quantidade: int, preco_unitario: float, desconto_item: float):
     sessao = SessionLocal()
     try:
         query = text("""
             CALL adicionar_item_venda(
+                CAST(:empresa_id AS INTEGER),
                 CAST(:venda_id AS INTEGER),
                 CAST(:variacao_id AS INTEGER),
                 CAST(:quantidade AS INTEGER),
@@ -329,6 +332,7 @@ def adicionar_item_venda(venda_id: int, variacao_id: int, quantidade: int, preco
             );
         """)
         sessao.execute(query, {
+            "empresa_id": int(empresa_id),
             "venda_id": int(venda_id),
             "variacao_id": int(variacao_id),
             "quantidade": int(quantidade),
@@ -341,6 +345,7 @@ def adicionar_item_venda(venda_id: int, variacao_id: int, quantidade: int, preco
         
         return True, "Item adicionado numa venda"
     except Exception as e:
+        sessao.rollback()
         return False, f"Erro: {e}"
     finally:
         sessao.close()
@@ -484,14 +489,31 @@ def app_buscar_perfil_administrador(empresa_id: int):
         with engine.connect() as conexao:
             resultado = conexao.execute(
                 text("""
-                    SELECT id_perfil
-                    FROM perfil
-                    WHERE empresa_id = :empresa_id AND LOWER(nome_perfil) = 'administrador' LIMIT 1
+                    SELECT pf.id_perfil
+                    FROM perfil AS pf
+                    JOIN perfil_permissao AS pp
+                        ON pp.perfil_id = pf.id_perfil
+                    JOIN permissao AS p
+                        ON p.id_permissao = pp.permissao_id
+                    WHERE pf.empresa_id = :empresa_id
+                    GROUP BY pf.id_perfil
+                    HAVING COUNT(DISTINCT p.nome_permissao) FILTER (
+                        WHERE UPPER(p.nome_permissao) IN (
+                            'GERENCIAR_FUNCIONARIOS',
+                            'GERENCIAR_PRODUTOS',
+                            'REALIZAR_VENDAS',
+                            'GERENCIAR_CLIENTES'
+                        )
+                    ) = 4
+                    ORDER BY pf.id_perfil
+                    LIMIT 1
                 """),
                 {"empresa_id": int(empresa_id)}
             )
+
             linha = resultado.fetchone()
             return linha[0] if linha else None
+        
     except Exception as e:
         print(f"Erro ao buscar perfil administrativo: {e}")
         return None
